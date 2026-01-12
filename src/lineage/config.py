@@ -53,13 +53,13 @@ class DatabaseConfig(BaseModel):
     database: Optional[str] = None
     username: Optional[str] = None
     password: Optional[str] = None
-    schema: str = "lineage"
+    db_schema: str = "lineage"  # Renamed from 'schema' to avoid shadowing BaseModel.schema()
 
 
 class ExportConfig(BaseModel):
     """Export configuration."""
     
-    json: bool = True
+    export_json: bool = True  # Renamed from 'json' to avoid shadowing BaseModel.json()
     csv: bool = True
     database: bool = False
     html: bool = True

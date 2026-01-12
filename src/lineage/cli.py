@@ -148,7 +148,7 @@ def main(repo: str, config: str, out: str, hive_metastore: str, hdfs_namenode: s
             # Step 6: Export results
             task = progress.add_task("[cyan]Exporting results...", total=None)
             
-            if cfg.export.json:
+            if cfg.export.export_json:
                 json_exporter = JSONExporter()
                 json_exporter.export(graph, metrics, output_dir / "lineage.json")
             
