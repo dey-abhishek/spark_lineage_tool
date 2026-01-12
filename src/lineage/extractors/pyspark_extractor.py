@@ -54,6 +54,12 @@ class PySparkASTVisitor(ast.NodeVisitor):
             if fact:
                 self.facts.append(fact)
         
+        # Detect JDBC operations
+        elif self._is_jdbc_operation(call_chain):
+            facts = self._extract_jdbc_facts(node, call_chain)
+            if facts:
+                self.facts.extend(facts)
+        
         self.generic_visit(node)
     
     def visit_Assign(self, node: ast.Assign) -> None:
@@ -115,6 +121,10 @@ class PySparkASTVisitor(ast.NodeVisitor):
         """Check if call chain is a Delta Lake operation."""
         delta_methods = ["forPath", "forName", "merge"]
         return "DeltaTable" in chain or any(method in chain for method in delta_methods)
+    
+    def _is_jdbc_operation(self, chain: List[str]) -> bool:
+        """Check if call chain is a JDBC operation."""
+        return "jdbc" in chain or ("read" in chain and "format" in chain)
     
     def _extract_string_arg(self, node: ast.Call, pos: int = 0) -> Optional[str]:
         """Extract string argument from call."""
@@ -486,6 +496,103 @@ class PySparkASTVisitor(ast.NodeVisitor):
             return fact
         
         return None
+    
+    def _extract_jdbc_facts(self, node: ast.Call, chain: List[str]) -> List[Fact]:
+        """Extract JDBC read/write operations."""
+        facts = []
+        
+        # Check if this is spark.read.jdbc() or spark.read.format("jdbc").load()
+        is_read = "read" in chain
+        is_write = "write" in chain
+        
+        if is_read:
+            # Extract JDBC URL and table
+            url = None
+            table = None
+            
+            # Try to extract from .jdbc(url, table, ...)
+            if "jdbc" in chain:
+                url = self._extract_string_arg(node, 0)
+                table = self._extract_string_arg(node, 1)
+            
+            # Try to extract from .option("url", ...) and .option("dbtable", ...)
+            if not url:
+                url = self._extract_option_value(node, "url")
+            if not table:
+                table = self._extract_option_value(node, "dbtable")
+                if not table:
+                    table = self._extract_option_value(node, "query")
+            
+            if url or table:
+                # Determine database type from JDBC URL
+                dataset_type = "jdbc"
+                if url:
+                    if "oracle" in url.lower():
+                        dataset_type = "oracle"
+                    elif "postgresql" in url.lower() or "postgres" in url.lower():
+                        dataset_type = "postgres"
+                    elif "mysql" in url.lower():
+                        dataset_type = "mysql"
+                    elif "sqlserver" in url.lower() or "mssql" in url.lower():
+                        dataset_type = "mssql"
+                
+                dataset_urn = f"{url}#{table}" if url and table else (table if table else url)
+                
+                fact = ReadFact(
+                    source_file=self.source_file,
+                    line_number=node.lineno,
+                    dataset_urn=dataset_urn,
+                    dataset_type=dataset_type,
+                    confidence=0.85,
+                    extraction_method=ExtractionMethod.AST,
+                    evidence=f"spark.read.jdbc(url={url[:50] if url else 'N/A'}, table={table[:50] if table else 'N/A'})",
+                    has_placeholders=("${" in dataset_urn if dataset_urn else False)
+                )
+                
+                fact.params["jdbc_url"] = url if url else "unknown"
+                fact.params["dbtable"] = table if table else "unknown"
+                facts.append(fact)
+        
+        elif is_write:
+            # Extract JDBC URL and table for writes
+            url = self._extract_option_value(node, "url")
+            table = self._extract_option_value(node, "dbtable")
+            
+            if not url:
+                # Try to extract from .jdbc(url, table, ...)
+                url = self._extract_string_arg(node, 0)
+                table = self._extract_string_arg(node, 1)
+            
+            if url or table:
+                dataset_type = "jdbc"
+                if url:
+                    if "oracle" in url.lower():
+                        dataset_type = "oracle"
+                    elif "postgresql" in url.lower() or "postgres" in url.lower():
+                        dataset_type = "postgres"
+                    elif "mysql" in url.lower():
+                        dataset_type = "mysql"
+                    elif "sqlserver" in url.lower() or "mssql" in url.lower():
+                        dataset_type = "mssql"
+                
+                dataset_urn = f"{url}#{table}" if url and table else (table if table else url)
+                
+                fact = WriteFact(
+                    source_file=self.source_file,
+                    line_number=node.lineno,
+                    dataset_urn=dataset_urn,
+                    dataset_type=dataset_type,
+                    confidence=0.85,
+                    extraction_method=ExtractionMethod.AST,
+                    evidence=f"df.write.jdbc(url={url[:50] if url else 'N/A'}, table={table[:50] if table else 'N/A'})",
+                    has_placeholders=("${" in dataset_urn if dataset_urn else False)
+                )
+                
+                fact.params["jdbc_url"] = url if url else "unknown"
+                fact.params["dbtable"] = table if table else "unknown"
+                facts.append(fact)
+        
+        return facts
 
 
 class PySparkExtractor(BaseExtractor):

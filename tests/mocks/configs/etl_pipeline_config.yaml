@@ -1,0 +1,111 @@
+# Config-driven ETL Job Configuration
+# This file contains all input/output paths and parameters
+
+pipeline:
+  name: "customer_analytics_etl"
+  version: "2.0"
+  environment: "prod"
+  
+# Input Data Sources
+inputs:
+  transactions:
+    path: "/data/raw/transactions/${run_date}"
+    format: "parquet"
+    partitions: 50
+  
+  customers:
+    path: "/data/raw/customers/${run_date}"
+    format: "avro"
+    schema_file: "/schemas/customer_v3.avsc"
+  
+  products:
+    path: "/data/raw/products/latest"
+    format: "orc"
+  
+  events:
+    path: "/data/raw/events/${run_date}/*.json"
+    format: "json"
+    multiline: true
+  
+  # Hive table inputs
+  hive_orders:
+    type: "hive_table"
+    database: "${env}_warehouse"
+    table: "orders"
+    filter: "order_date = '${run_date}'"
+  
+  hive_users:
+    type: "hive_table"
+    database: "${env}_warehouse"
+    table: "users"
+
+# Output Data Destinations
+outputs:
+  enriched_transactions:
+    path: "/data/processed/enriched_transactions/${run_date}"
+    format: "parquet"
+    mode: "overwrite"
+    partition_by: ["run_date", "region", "customer_tier"]
+    compression: "snappy"
+  
+  customer_summary:
+    path: "/data/processed/customer_summary/${run_date}"
+    format: "orc"
+    mode: "overwrite"
+    partition_by: ["run_date"]
+    compression: "zlib"
+  
+  fraud_alerts:
+    path: "/data/processed/fraud_alerts/${run_date}"
+    format: "json"
+    mode: "append"
+  
+  # Hive table outputs
+  hive_analytics:
+    type: "hive_table"
+    database: "${env}_analytics"
+    table: "enriched_transactions_daily"
+    mode: "overwrite"
+    format: "orc"
+  
+  hive_reports:
+    type: "hive_table"
+    database: "${env}_reports"
+    table: "customer_360_view"
+    mode: "append"
+
+# Intermediate Staging
+staging:
+  base_path: "/staging/etl/${pipeline_name}/${run_date}"
+  cleanup_after_success: true
+  retention_days: 7
+
+# Job Parameters
+spark_config:
+  executor_memory: "8g"
+  executor_cores: 4
+  num_executors: 50
+  driver_memory: "4g"
+  shuffle_partitions: 200
+  dynamic_allocation: true
+
+# Hive Parameters
+hive_config:
+  execution_engine: "tez"
+  dynamic_partitions: true
+  max_dynamic_partitions: 10000
+
+# Processing Options
+processing:
+  enable_data_quality_checks: true
+  enable_pii_masking: true
+  enable_fraud_detection: true
+  lookback_days: 90
+  
+# Metadata
+metadata:
+  owner: "data-engineering@company.com"
+  schedule: "daily"
+  sla_hours: 4
+  alert_on_failure: true
+

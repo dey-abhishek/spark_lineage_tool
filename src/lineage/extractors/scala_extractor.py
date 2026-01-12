@@ -38,6 +38,9 @@ class ScalaExtractor(BaseExtractor):
             "save_as_table": re.compile(r'\.saveAsTable\((?:(?:s?)"([^"]+)"|(\w+))\)', re.DOTALL),
             "insert_into": re.compile(r'\.insertInto\((?:(?:s?)"([^"]+)"|(\w+))\)', re.DOTALL),
             "spark_sql": re.compile(r'\.sql\((?:s?)"([^"]+)"\)', re.DOTALL),
+            # JDBC patterns
+            "jdbc_read": re.compile(r'\.read\.jdbc\([^,]+,\s*(?:s?)"([^"]+)"', re.DOTALL),
+            "jdbc_write": re.compile(r'\.write\.jdbc\([^,]+,\s*(?:s?)"([^"]+)"', re.DOTALL),
         }
     
     def extract(self, file_path: Path) -> List[Fact]:
@@ -152,6 +155,43 @@ class ScalaExtractor(BaseExtractor):
                         has_placeholders=has_placeholders
                     )
                     facts.append(fact)
+        
+        # Extract JDBC operations
+        for pattern_name, pattern in self.patterns.items():
+            if pattern_name in ["jdbc_read", "jdbc_write"]:
+                for match in pattern.finditer(content_joined):
+                    table = match.group(1)
+                    line_number = content[:match.start()].count("\n") + 1
+                    
+                    has_placeholders = "$" in table
+                    dataset_type = "jdbc"
+                    
+                    if pattern_name == "jdbc_read":
+                        fact = ReadFact(
+                            source_file=source_file,
+                            line_number=line_number,
+                            dataset_urn=f"jdbc://{table}",
+                            dataset_type=dataset_type,
+                            confidence=0.80,
+                            extraction_method=ExtractionMethod.REGEX,
+                            evidence=match.group(0)[:100],
+                            has_placeholders=has_placeholders
+                        )
+                        fact.params["dbtable"] = table
+                        facts.append(fact)
+                    else:
+                        fact = WriteFact(
+                            source_file=source_file,
+                            line_number=line_number,
+                            dataset_urn=f"jdbc://{table}",
+                            dataset_type=dataset_type,
+                            confidence=0.80,
+                            extraction_method=ExtractionMethod.REGEX,
+                            evidence=match.group(0)[:100],
+                            has_placeholders=has_placeholders
+                        )
+                        fact.params["dbtable"] = table
+                        facts.append(fact)
         
         # Use rule engine for additional patterns
         if self.rule_engine:
