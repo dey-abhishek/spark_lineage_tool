@@ -71,15 +71,8 @@ secrets.yaml
 *secrets*
 *password*
 
-# Documentation (exclude all except README.md)
-INSTALLATION_COMPLETE.md
-SETUP.md
-TDD_PROGRESS_REPORT.md
-TDD_TEST_RESULTS.md
-TDD_FINAL_RESULTS.md
-TDD_COMPLETION_REPORT.md
-ADVANCED_FEATURES_REPORT.md
-FORMAT_UDF_COVERAGE_REPORT.md
-CONFIG_DRIVEN_PIPELINE_REPORT.md
-*.draft.md
+# Documentation (exclude all .md files except README.md and docs/*.md)
+*.md
+!README.md
+!docs/*.md
 
