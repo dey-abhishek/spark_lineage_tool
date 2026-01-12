@@ -217,10 +217,51 @@ class LineageBuilder:
         if "://" in urn:
             urn = urn.split("://", 1)[1]
         
+        # For JDBC URNs with URL#table pattern
+        if "#" in urn:
+            table_part = urn.split("#", 1)[1]
+            # Clean JDBC query fragments
+            table_part = self._clean_jdbc_table_name(table_part)
+            return table_part
+        
         if "/" in urn:
             return urn.split("/")[-1] or urn.split("/")[-2]
         
         return urn.split(".")[-1] if "." in urn else urn
+    
+    def _clean_jdbc_table_name(self, table_name: str) -> str:
+        """Clean JDBC table name from SQL fragments."""
+        import re
+        
+        # Remove outer parentheses
+        while table_name.startswith('(') and table_name.endswith(')'):
+            table_name = table_name[1:-1].strip()
+        
+        # Check if it's a SQL query (contains SQL keywords or is too long)
+        if any(kw in table_name.upper() for kw in ['SELECT', 'FROM', 'WHERE', 'JOIN']) or len(table_name) > 50:
+            # Pattern 1: Simple table at start (e.g., "CUSTOMERS WHERE ...")
+            simple_pattern = r'^([a-zA-Z_][\w.]*?)(?:\s+WHERE|\s+JOIN|\s+ORDER|\s+GROUP|\s+LIMIT|\s*$)'
+            match = re.search(simple_pattern, table_name, re.IGNORECASE)
+            if match:
+                name = match.group(1).strip()
+                if name.upper() not in ['SELECT', 'WITH', 'INSERT', 'UPDATE', 'DELETE']:
+                    return name.lower()
+            
+            # Pattern 2: SELECT ... FROM table_name
+            from_pattern = r'FROM\s+([a-zA-Z_][\w.]*)'
+            match = re.search(from_pattern, table_name, re.IGNORECASE)
+            if match:
+                name = match.group(1).strip()
+                # Handle schema.table
+                if '.' in name:
+                    parts = name.split('.')
+                    return '.'.join(parts[-2:]).lower()
+                return name.lower()
+            
+            # Fallback: truncate
+            return table_name[:30] + "..." if len(table_name) > 30 else table_name
+        
+        return table_name
     
     def _extract_module_name(self, file_path: str) -> str:
         """Extract module/package name from file path."""
