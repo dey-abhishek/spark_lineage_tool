@@ -54,6 +54,9 @@ class VariableResolver:
         """Perform one iteration of variable resolution."""
         result = text
         
+        # First, handle shell parameter expansion with defaults: ${var:-default}
+        result = self._resolve_parameter_defaults(result)
+        
         for pattern in self.patterns:
             def replace_fn(match: re.Match) -> str:
                 var_name = match.group(1)
@@ -65,6 +68,33 @@ class VariableResolver:
             result = pattern.sub(replace_fn, result)
         
         return result
+    
+    def _resolve_parameter_defaults(self, text: str) -> str:
+        """Resolve shell parameter expansion with defaults: ${var:-default}
+        
+        Extracts and uses the default value when parameter can't be resolved.
+        Examples:
+            ${1:-2024-01-15} -> 2024-01-15
+            ${ENV:-prod} -> prod (if ENV not defined)
+            ${2:-default} -> default
+        """
+        # Pattern: ${parameter:-default}
+        param_default_pattern = re.compile(r'\$\{([^}:]+):-([^}]+)\}')
+        
+        def replace_with_default(match: re.Match) -> str:
+            param_name = match.group(1)
+            default_value = match.group(2)
+            
+            # Try to resolve the parameter from symbol table
+            value = self.symbol_table.resolve(param_name)
+            if value is not None:
+                return value
+            
+            # Parameter not in symbol table, use default value
+            # This handles positional parameters ($1, $2, etc.) and undefined env vars
+            return default_value
+        
+        return param_default_pattern.sub(replace_with_default, text)
     
     def _has_variables(self, text: str) -> bool:
         """Check if text contains unresolved variables."""
