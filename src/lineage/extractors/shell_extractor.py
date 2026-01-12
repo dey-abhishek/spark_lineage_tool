@@ -32,7 +32,8 @@ class ShellExtractor(BaseExtractor):
             "hive_file": re.compile(r'hive\s+-f\s+(\S+)'),
             "beeline_execute": re.compile(r'beeline\s+.*?-e\s+["\']([^"\']+)["\']', re.DOTALL),
             "beeline_file": re.compile(r'beeline\s+.*?-f\s+(\S+)'),
-            "cron_job": re.compile(r'^[\s#]*(\d+|\*)\s+(\d+|\*)\s+(\d+|\*)\s+(\d+|\*)\s+(\d+|\*)\s+(.+)$', re.MULTILINE),
+            "cron_job": re.compile(r'^[\s#]*([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+(.+)$', re.MULTILINE),
+            "cron_special": re.compile(r'^[\s#]*(@(?:yearly|annually|monthly|weekly|daily|hourly|reboot))\s+(.+)$', re.MULTILINE),
         }
     
     def extract(self, file_path: Path) -> List[Fact]:
@@ -720,6 +721,38 @@ class ShellExtractor(BaseExtractor):
         """Extract cron job definitions that may contain spark-submit commands."""
         facts = []
         
+        # Handle special cron syntax (@daily, @hourly, etc.)
+        for match in self.patterns["cron_special"].finditer(content):
+            schedule_type, command = match.groups()
+            line_number = content[:match.start()].count("\n") + 1
+            
+            # Skip if it's a comment
+            if match.group(0).strip().startswith('#'):
+                continue
+            
+            # Check if the command contains spark-submit
+            if 'spark-submit' in command:
+                fact = JobDependencyFact(
+                    source_file=source_file,
+                    line_number=line_number,
+                    confidence=0.75,
+                    extraction_method=ExtractionMethod.REGEX,
+                    evidence=match.group(0),
+                    dependency_type="cron-spark-submit"
+                )
+                
+                fact.params["cron_schedule"] = {"schedule_type": schedule_type}
+                fact.params["cron_command"] = command.strip()
+                
+                # Try to extract the spark script using the main app finder
+                main_app = self._find_main_application_file("spark-submit " + command)
+                if main_app:
+                    fact.params["spark_script"] = main_app
+                    fact.dependency_job = main_app
+                
+                facts.append(fact)
+        
+        # Handle standard cron format
         for match in self.patterns["cron_job"].finditer(content):
             minute, hour, day, month, weekday, command = match.groups()
             line_number = content[:match.start()].count("\n") + 1
@@ -748,11 +781,11 @@ class ShellExtractor(BaseExtractor):
                 }
                 fact.params["cron_command"] = command.strip()
                 
-                # Try to extract the spark script from the cron command
-                spark_script_match = re.search(r'(\S+\.(?:py|jar))', command)
-                if spark_script_match:
-                    fact.params["spark_script"] = spark_script_match.group(1)
-                    fact.dependency_job = spark_script_match.group(1)
+                # Try to extract the spark script using the main app finder
+                main_app = self._find_main_application_file("spark-submit " + command)
+                if main_app:
+                    fact.params["spark_script"] = main_app
+                    fact.dependency_job = main_app
                 
                 facts.append(fact)
             elif any(cmd in command for cmd in ['hive', 'beeline', 'hadoop']):
