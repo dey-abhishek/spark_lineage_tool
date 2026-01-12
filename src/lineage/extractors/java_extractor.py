@@ -30,23 +30,23 @@ class JavaExtractor(BaseExtractor):
         
         # Java-specific patterns
         self.patterns = {
-            # Spark Java API - Reads
-            "spark_read_parquet": re.compile(r'\.read\(\)\.parquet\("([^"]+)"\)', re.DOTALL),
-            "spark_read_csv": re.compile(r'\.read\(\)\.csv\("([^"]+)"\)', re.DOTALL),
-            "spark_read_json": re.compile(r'\.read\(\)\.json\("([^"]+)"\)', re.DOTALL),
-            "spark_read_orc": re.compile(r'\.read\(\)\.orc\("([^"]+)"\)', re.DOTALL),
-            "spark_read_text": re.compile(r'\.read\(\)\.text\("([^"]+)"\)', re.DOTALL),
-            "spark_read_table": re.compile(r'\.read\(\)\.table\("([^"]+)"\)', re.DOTALL),
-            "spark_table": re.compile(r'\.table\("([^"]+)"\)', re.DOTALL),
+            # Spark Java API - Reads (handle whitespace and newlines)
+            "spark_read_parquet": re.compile(r'\.read\(\)\s*\.parquet\(\s*"([^"]+)"', re.DOTALL),
+            "spark_read_csv": re.compile(r'\.read\(\)\s*\.csv\(\s*"([^"]+)"', re.DOTALL),
+            "spark_read_json": re.compile(r'\.read\(\)\s*\.json\(\s*"([^"]+)"', re.DOTALL),
+            "spark_read_orc": re.compile(r'\.read\(\)\s*\.orc\(\s*"([^"]+)"', re.DOTALL),
+            "spark_read_text": re.compile(r'\.read\(\)\s*\.text\(\s*"([^"]+)"', re.DOTALL),
+            "spark_read_table": re.compile(r'\.read\(\)\s*\.table\(\s*"([^"]+)"', re.DOTALL),
+            "spark_table": re.compile(r'\.table\(\s*"([^"]+)"', re.DOTALL),
             
             # Spark Java API - Writes
-            "spark_write_parquet": re.compile(r'\.write\(\)\.parquet\("([^"]+)"\)', re.DOTALL),
-            "spark_write_csv": re.compile(r'\.write\(\)\.csv\("([^"]+)"\)', re.DOTALL),
-            "spark_write_json": re.compile(r'\.write\(\)\.json\("([^"]+)"\)', re.DOTALL),
-            "spark_write_orc": re.compile(r'\.write\(\)\.orc\("([^"]+)"\)', re.DOTALL),
-            "spark_write_text": re.compile(r'\.write\(\)\.text\("([^"]+)"\)', re.DOTALL),
-            "spark_save_as_table": re.compile(r'\.saveAsTable\("([^"]+)"\)', re.DOTALL),
-            "spark_insert_into": re.compile(r'\.insertInto\("([^"]+)"\)', re.DOTALL),
+            "spark_write_parquet": re.compile(r'\.write\(\)\s*(?:\.mode\([^)]*\)\s*)?\.parquet\(\s*"([^"]+)"', re.DOTALL),
+            "spark_write_csv": re.compile(r'\.write\(\)\s*(?:\.mode\([^)]*\)\s*)?\.csv\(\s*"([^"]+)"', re.DOTALL),
+            "spark_write_json": re.compile(r'\.write\(\)\s*(?:\.mode\([^)]*\)\s*)?\.json\(\s*"([^"]+)"', re.DOTALL),
+            "spark_write_orc": re.compile(r'\.write\(\)\s*(?:\.mode\([^)]*\)\s*)?\.orc\(\s*"([^"]+)"', re.DOTALL),
+            "spark_write_text": re.compile(r'\.write\(\)\s*(?:\.mode\([^)]*\)\s*)?\.text\(\s*"([^"]+)"', re.DOTALL),
+            "spark_save_as_table": re.compile(r'\.saveAsTable\(\s*"([^"]+)"', re.DOTALL),
+            "spark_insert_into": re.compile(r'\.insertInto\(\s*"([^"]+)"', re.DOTALL),
             
             # Kafka - Native Java API
             "kafka_producer_record": re.compile(r'new\s+ProducerRecord<[^>]*>\s*\(\s*"([^"]+)"', re.DOTALL),
@@ -60,6 +60,7 @@ class JavaExtractor(BaseExtractor):
             "hdfs_rename": re.compile(r'\.rename\s*\(\s*new\s+Path\s*\(\s*"([^"]+)"\s*\),\s*new\s+Path\s*\(\s*"([^"]+)"\s*\)', re.DOTALL),
             "hdfs_delete": re.compile(r'\.delete\s*\(\s*new\s+Path\s*\(\s*"([^"]+)"\s*\)', re.DOTALL),
             "hdfs_path_concat": re.compile(r'new\s+Path\s*\(\s*"([^"]+)"\s*\+\s*"([^"]+)"\s*\)', re.DOTALL),
+            "hdfs_path_new": re.compile(r'new\s+Path\s*\(\s*([A-Z_][A-Z0-9_]*(?:\s*\+\s*"[^"]*")?)', re.DOTALL),
             
             # JDBC
             "jdbc_read": re.compile(r'\.jdbc\s*\([^,]+,\s*"([^"]+)"', re.DOTALL),
@@ -324,8 +325,11 @@ class JavaExtractor(BaseExtractor):
         """Extract variable definitions from Java code."""
         facts = []
         
-        # Pattern: String varName = "value";
-        var_pattern = re.compile(r'^\s*(?:final\s+)?String\s+(\w+)\s*=\s*"([^"]+)"\s*;', re.MULTILINE)
+        # Pattern: String varName = "value"; or static final String varName = "value";
+        var_pattern = re.compile(
+            r'(?:private\s+|public\s+|protected\s+)?(?:static\s+)?(?:final\s+)?String\s+(\w+)\s*=\s*"([^"]+)"\s*;',
+            re.MULTILINE
+        )
         
         for match in var_pattern.finditer(content):
             var_name = match.group(1)
