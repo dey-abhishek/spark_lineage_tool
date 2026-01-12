@@ -18,7 +18,7 @@ from lineage.rules import create_default_engine
 from lineage.resolution import SymbolTable, PathCanonicalizer, VariableResolver
 from lineage.lineage import LineageBuilder
 from lineage.scoring import ConfidenceScorer, PriorityCalculator
-from lineage.exporters import JSONExporter, CSVExporter, DatabaseExporter, HTMLExporter
+from lineage.exporters import JSONExporter, CSVExporter, DatabaseExporter, HTMLExporter, ExcelExporter
 
 console = Console()
 
@@ -151,6 +151,13 @@ def main(repo: str, config: str, out: str, hive_metastore: str, hdfs_namenode: s
             if cfg.export.html:
                 html_exporter = HTMLExporter()
                 html_exporter.export(graph, metrics, output_dir / "lineage_report.html")
+            
+            # Always export Excel
+            try:
+                excel_exporter = ExcelExporter(graph, metrics)
+                excel_exporter.export(output_dir)
+            except ImportError as e:
+                console.print(f"[yellow]Warning: Could not export Excel: {e}[/yellow]")
             
             if cfg.export.database and cfg.database.enabled:
                 db_exporter = DatabaseExporter(cfg.database)

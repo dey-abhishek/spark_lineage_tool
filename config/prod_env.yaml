@@ -1,0 +1,40 @@
+# Production Environment Configuration
+# This file provides environment-specific values for variable resolution
+
+# Environment identifier
+env: prod
+environment: prod
+
+# Database schemas
+INPUT_DB: prod_db
+OUTPUT_DB: analytics_db
+WAREHOUSE_DB: prod_warehouse
+REPORTING_DB: prod_reports
+ANALYTICS_DB: prod_analytics
+
+# Common variables
+RUN_DATE: "2024-01-15"
+base_path: /data/prod
+
+# Paths
+bronze_path: /data/prod/bronze
+silver_path: /data/prod/silver
+gold_path: /data/prod/gold
+
+# HDFS settings
+HDFS_NAMENODE: hdfs://prod-namenode:8020
+HDFS_STAGING: /staging/prod
+
+# Local staging
+LOCAL_STAGING: /mnt/staging
+
+# Configuration object (nested)
+config:
+  environment: prod
+  basePath: /data/prod
+  runDate: "2024-01-15"
+  
+# Database settings
+database: prod_db
+table: customers
+
