@@ -26,11 +26,13 @@ class ShellExtractor(BaseExtractor):
             "hdfs_cat": re.compile(r'hdfs\s+dfs\s+-cat\s+(\S+)'),
             "hdfs_text": re.compile(r'hdfs\s+dfs\s+-text\s+(\S+)'),
             "distcp": re.compile(r'hadoop\s+distcp(?:\s+|[\s\\]+)*(?:-[\w-]+(?:\s+|[\s\\]+)+)*([^\s\\]+)(?:\s+|[\s\\]+)+([^\s\\]+)', re.MULTILINE),
-            "spark_submit": re.compile(r'spark-submit\s+.*?(\S+\.(?:py|jar|scala))'),
+            "spark_submit": re.compile(r'spark-submit\s+.*?(\S+\.(?:py|jar))(?:[ \t]+([^\n]*))?', re.MULTILINE),
+            "spark_submit_full": re.compile(r'spark-submit[ \t]+(.*?)(\S+\.(?:py|jar))(?:[ \t]+([^\n]*))?', re.MULTILINE),
             "hive_execute": re.compile(r'hive\s+-e\s+["\']([^"\']+)["\']'),
             "hive_file": re.compile(r'hive\s+-f\s+(\S+)'),
             "beeline_execute": re.compile(r'beeline\s+.*?-e\s+["\']([^"\']+)["\']', re.DOTALL),
             "beeline_file": re.compile(r'beeline\s+.*?-f\s+(\S+)'),
+            "cron_job": re.compile(r'^[\s#]*(\d+|\*)\s+(\d+|\*)\s+(\d+|\*)\s+(\d+|\*)\s+(\d+|\*)\s+(.+)$', re.MULTILINE),
         }
     
     def extract(self, file_path: Path) -> List[Fact]:
@@ -48,6 +50,10 @@ class ShellExtractor(BaseExtractor):
     def extract_from_content(self, content: str, source_file: str) -> List[Fact]:
         """Extract facts from shell script content."""
         facts = []
+        
+        # Check if this is a crontab file (before removing comments)
+        if source_file.endswith(('crontab', '.cron', 'cron.txt')) or 'cron' in source_file.lower():
+            facts.extend(self._extract_cron_jobs(content, source_file))
         
         # Remove comments
         content_no_comments = self._remove_comments(content)
@@ -458,20 +464,40 @@ class ShellExtractor(BaseExtractor):
         """Extract job invocations (spark-submit, hive, beeline, etc.)."""
         facts = []
         
-        # spark-submit
-        for match in self.patterns["spark_submit"].finditer(content):
-            script = match.group(1)
+        # spark-submit (enhanced to capture configs and arguments)
+        for match in self.patterns["spark_submit_full"].finditer(content):
+            spark_configs = match.group(1).strip()  # Everything before the script
+            script = match.group(2)  # The .py or .jar file
+            script_args = match.group(3).strip() if match.group(3) else ""  # Arguments after script
             line_number = content[:match.start()].count("\n") + 1
+            
+            # Determine job type
+            job_type = "pyspark" if script.endswith(".py") else "spark-jar"
             
             fact = JobDependencyFact(
                 source_file=source_file,
                 line_number=line_number,
-                confidence=0.80,
+                confidence=0.85,
                 extraction_method=ExtractionMethod.REGEX,
                 evidence=match.group(0),
                 dependency_job=script,
                 dependency_type="spark-submit"
             )
+            
+            # Extract spark configurations
+            fact.params["job_type"] = job_type
+            fact.params["spark_configs"] = self._parse_spark_configs(spark_configs)
+            fact.params["script_args"] = self._parse_script_args(script_args)
+            
+            # Extract key configs for easier access
+            configs = fact.params["spark_configs"]
+            if "master" in configs:
+                fact.params["master"] = configs["master"]
+            if "deploy-mode" in configs:
+                fact.params["deploy_mode"] = configs["deploy-mode"]
+            if "class" in configs:
+                fact.params["main_class"] = configs["class"]
+            
             facts.append(fact)
         
         # beeline -e
@@ -582,6 +608,162 @@ class ShellExtractor(BaseExtractor):
             return fact
         
         return None
+    
+    def _parse_spark_configs(self, config_string: str) -> Dict[str, str]:
+        """Parse spark-submit configuration flags."""
+        configs = {}
+        
+        # Pattern to match --config "quoted value" or --config 'quoted value' or --config value
+        quoted_pattern = re.compile(r'--([a-zA-Z][-a-zA-Z0-9]*)\s+"([^"]*)"')
+        single_quoted_pattern = re.compile(r"--([a-zA-Z][-a-zA-Z0-9]*)\s+'([^']*)'")
+        equals_quoted_pattern = re.compile(r'--([a-zA-Z][-a-zA-Z0-9]*)="([^"]*)"')
+        equals_single_quoted_pattern = re.compile(r"--([a-zA-Z][-a-zA-Z0-9]*)='([^']*)'")
+        unquoted_pattern = re.compile(r'--([a-zA-Z][-a-zA-Z0-9]*)\s+([^\s-][^\s]*)')
+        equals_pattern = re.compile(r'--([a-zA-Z][-a-zA-Z0-9]*)=([^\s]+)')
+        
+        # Extract --key "value" patterns (double quotes)
+        for match in quoted_pattern.finditer(config_string):
+            key = match.group(1)
+            value = match.group(2)
+            configs[key] = value
+        
+        # Extract --key 'value' patterns (single quotes)
+        for match in single_quoted_pattern.finditer(config_string):
+            key = match.group(1)
+            value = match.group(2)
+            configs[key] = value
+        
+        # Extract --key="value" patterns (double quotes)
+        for match in equals_quoted_pattern.finditer(config_string):
+            key = match.group(1)
+            value = match.group(2)
+            configs[key] = value
+        
+        # Extract --key='value' patterns (single quotes)
+        for match in equals_single_quoted_pattern.finditer(config_string):
+            key = match.group(1)
+            value = match.group(2)
+            configs[key] = value
+        
+        # Extract --key value patterns (unquoted) - but skip if already captured as quoted
+        for match in unquoted_pattern.finditer(config_string):
+            key = match.group(1)
+            if key not in configs:  # Don't overwrite quoted values
+                value = match.group(2).strip('"\'')
+                configs[key] = value
+        
+        # Extract --key=value patterns (unquoted)
+        for match in equals_pattern.finditer(config_string):
+            key = match.group(1)
+            value = match.group(2).strip('"\'')
+            if key not in configs:  # Don't overwrite existing
+                configs[key] = value
+        
+        # Extract --conf spark.config=value
+        conf_pattern = re.compile(r'--conf\s+([^=\s]+)=([^\s]+)')
+        spark_confs = {}
+        for match in conf_pattern.finditer(config_string):
+            conf_key = match.group(1)
+            conf_value = match.group(2).strip('"\'')
+            spark_confs[conf_key] = conf_value
+        
+        if spark_confs:
+            configs["spark_confs"] = spark_confs
+        
+        return configs
+    
+    def _parse_script_args(self, args_string: str) -> List[str]:
+        """Parse script arguments (everything after the .py or .jar file)."""
+        if not args_string:
+            return []
+        
+        # Simple split by whitespace, but preserve quoted strings
+        args = []
+        current_arg = []
+        in_quote = None
+        
+        for char in args_string:
+            if char in ('"', "'"):
+                if in_quote == char:
+                    in_quote = None
+                elif in_quote is None:
+                    in_quote = char
+                else:
+                    current_arg.append(char)
+            elif char.isspace() and in_quote is None:
+                if current_arg:
+                    args.append(''.join(current_arg))
+                    current_arg = []
+            else:
+                current_arg.append(char)
+        
+        if current_arg:
+            args.append(''.join(current_arg))
+        
+        return args
+    
+    def _extract_cron_jobs(self, content: str, source_file: str) -> List[Fact]:
+        """Extract cron job definitions that may contain spark-submit commands."""
+        facts = []
+        
+        for match in self.patterns["cron_job"].finditer(content):
+            minute, hour, day, month, weekday, command = match.groups()
+            line_number = content[:match.start()].count("\n") + 1
+            
+            # Skip if it's a comment
+            if match.group(0).strip().startswith('#'):
+                continue
+            
+            # Check if the command contains spark-submit
+            if 'spark-submit' in command:
+                fact = JobDependencyFact(
+                    source_file=source_file,
+                    line_number=line_number,
+                    confidence=0.75,
+                    extraction_method=ExtractionMethod.REGEX,
+                    evidence=match.group(0),
+                    dependency_type="cron-spark-submit"
+                )
+                
+                fact.params["cron_schedule"] = {
+                    "minute": minute,
+                    "hour": hour,
+                    "day": day,
+                    "month": month,
+                    "weekday": weekday
+                }
+                fact.params["cron_command"] = command.strip()
+                
+                # Try to extract the spark script from the cron command
+                spark_script_match = re.search(r'(\S+\.(?:py|jar))', command)
+                if spark_script_match:
+                    fact.params["spark_script"] = spark_script_match.group(1)
+                    fact.dependency_job = spark_script_match.group(1)
+                
+                facts.append(fact)
+            elif any(cmd in command for cmd in ['hive', 'beeline', 'hadoop']):
+                # Also capture other big data job schedulers
+                fact = JobDependencyFact(
+                    source_file=source_file,
+                    line_number=line_number,
+                    confidence=0.70,
+                    extraction_method=ExtractionMethod.REGEX,
+                    evidence=match.group(0),
+                    dependency_type="cron-job"
+                )
+                
+                fact.params["cron_schedule"] = {
+                    "minute": minute,
+                    "hour": hour,
+                    "day": day,
+                    "month": month,
+                    "weekday": weekday
+                }
+                fact.params["cron_command"] = command.strip()
+                
+                facts.append(fact)
+        
+        return facts
     
     def get_confidence_base(self) -> float:
         """Get base confidence for shell extraction."""

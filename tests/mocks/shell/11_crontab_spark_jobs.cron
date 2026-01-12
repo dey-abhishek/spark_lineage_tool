@@ -1,0 +1,56 @@
+# Crontab file with scheduled Spark jobs
+# Tests cron detection and spark-submit extraction
+
+# Run daily ETL at 2 AM
+0 2 * * * /scripts/daily_etl.sh >> /logs/daily_etl.log 2>&1
+
+# Run PySpark customer processing every hour
+0 * * * * spark-submit --master yarn --deploy-mode cluster /jobs/hourly_customer_sync.py --date $(date +\%Y-\%m-\%d)
+
+# Run Scala JAR for transaction processing at 3:30 AM daily
+30 3 * * * spark-submit --master yarn --class com.company.TransactionETL --deploy-mode cluster /jars/transaction-etl.jar --run-date $(date +\%Y-\%m-\%d) >> /logs/transaction_etl.log 2>&1
+
+# Run aggregation job every 15 minutes
+*/15 * * * * /opt/spark/bin/spark-submit --master yarn /jobs/realtime_aggregation.py
+
+# Run weekly report on Sundays at midnight
+0 0 * * 0 spark-submit --master yarn --deploy-mode cluster --name "Weekly Report" --executor-memory 8G /jobs/weekly_report.py --week-ending $(date +\%Y-\%m-\%d)
+
+# Run monthly reconciliation on 1st of each month at 4 AM
+0 4 1 * * spark-submit --master yarn --class com.company.MonthlyReconciliation /jars/monthly-recon.jar --month $(date +\%Y-\%m)
+
+# Run Hive job daily at 5 AM
+0 5 * * * hive -f /sql/daily_hive_agg.hql --hivevar run_date=$(date +\%Y-\%m-\%d)
+
+# Run distcp backup daily at 1 AM
+0 1 * * * hadoop distcp -update /data/processed /backup/daily/$(date +\%Y-\%m-\%d)
+
+# Commented out job (should be ignored)
+# 0 6 * * * spark-submit --master yarn /jobs/disabled_job.py
+
+# Run complex pipeline with multiple spark jobs
+0 7 * * 1-5 /scripts/weekday_pipeline.sh $(date +\%Y-\%m-\%d) prod
+
+# Run PySpark with multiple configurations
+0 8 * * * spark-submit --master yarn --deploy-mode cluster --conf spark.sql.shuffle.partitions=500 --conf spark.dynamicAllocation.enabled=true /jobs/optimized_etl.py --input /data/raw --output /data/processed --date $(date +\%Y\%m\%d)
+
+# Run Scala JAR with classpath
+0 9 * * * HADOOP_CLASSPATH=/libs/* spark-submit --master yarn --class com.company.Main --jars /libs/deps.jar /jars/main-app.jar --config /configs/prod.conf
+
+# Run on specific days (1st and 15th of month)
+0 10 1,15 * * spark-submit --master yarn /jobs/semi_monthly_report.py
+
+# Run every 6 hours
+0 */6 * * * spark-submit --master yarn --deploy-mode cluster /jobs/six_hourly_sync.py --timestamp $(date +\%Y\%m\%d\%H\%M\%S)
+
+# User-specific cron
+@daily spark-submit --master yarn /jobs/user_daily_job.py
+@hourly /opt/spark/bin/spark-submit --master yarn /jobs/hourly_metrics.py
+@weekly spark-submit --master yarn --class com.company.WeeklyCleanup /jars/cleanup.jar
+
+# Run beeline job
+0 11 * * * beeline -u jdbc:hive2://localhost:10000 -f /sql/daily_summary.sql
+
+# Multi-line spark-submit in cron (using semicolons)
+0 12 * * * cd /jobs && spark-submit --master yarn --deploy-mode cluster main_job.py; echo "Job completed at $(date)"
+
