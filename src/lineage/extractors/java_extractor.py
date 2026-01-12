@@ -88,7 +88,17 @@ class JavaExtractor(BaseExtractor):
         content_no_comments = self._remove_comments(content)
         
         # Extract variable definitions (String var = "value")
-        facts.extend(self._extract_variable_definitions(content_no_comments, source_file))
+        var_facts = self._extract_variable_definitions(content_no_comments, source_file)
+        facts.extend(var_facts)
+        
+        # Build variable map for resolution
+        var_map = {fact.config_key: fact.config_value for fact in var_facts if hasattr(fact, 'config_key')}
+        
+        # Extract HDFS operations with variable resolution
+        facts.extend(self._extract_hdfs_operations(content_no_comments, source_file, var_map))
+        
+        # Extract SQL templates with variable resolution
+        facts.extend(self._extract_sql_templates(content_no_comments, source_file, var_map))
         
         # Normalize whitespace for method chains - join lines that continue with a dot
         # This handles patterns like:
@@ -349,6 +359,191 @@ class JavaExtractor(BaseExtractor):
                 evidence=match.group(0).strip()
             )
             facts.append(fact)
+        
+        return facts
+    
+    def _extract_hdfs_operations(self, content: str, source_file: str, var_map: dict) -> List[Fact]:
+        """Extract HDFS FileSystem operations with variable resolution."""
+        facts = []
+        
+        # Pattern: new Path(CONSTANT + "/" + variable)
+        path_concat_pattern = re.compile(
+            r'new Path\((\w+)\s*\+\s*"([^"]*)"\s*\+\s*(\w+)\)',
+            re.MULTILINE
+        )
+        
+        for match in path_concat_pattern.finditer(content):
+            const_name = match.group(1)
+            separator = match.group(2)
+            var_name = match.group(3)
+            
+            # Resolve constant from var_map
+            if const_name in var_map:
+                base_path = var_map[const_name]
+                # Create parametric path
+                resolved_path = f"{base_path}{separator}{{{var_name}}}"
+                
+                # Determine if this is a read or write based on context
+                # Look ahead for fs.exists, fs.delete, fs.mkdirs
+                context_start = max(0, match.start() - 100)
+                context_end = min(len(content), match.end() + 200)
+                context = content[context_start:context_end]
+                
+                # Check for write operations
+                is_write = any(op in context for op in ['mkdirs', 'create', 'copyFromLocalFile', 'moveFromLocalFile'])
+                # Check for read operations
+                is_read = any(op in context for op in ['exists', 'copyToLocalFile', 'open'])
+                
+                if is_write:
+                    fact = WriteFact(
+                        source_file=source_file,
+                        line_number=1,
+                        dataset_urn=resolved_path,
+                        dataset_type="hdfs",
+                        confidence=0.75,
+                        extraction_method=ExtractionMethod.REGEX,
+                        evidence=match.group(0),
+                        has_placeholders=True
+                    )
+                    facts.append(fact)
+                elif is_read:
+                    fact = ReadFact(
+                        source_file=source_file,
+                        line_number=1,
+                        dataset_urn=resolved_path,
+                        dataset_type="hdfs",
+                        confidence=0.75,
+                        extraction_method=ExtractionMethod.REGEX,
+                        evidence=match.group(0),
+                        has_placeholders=True
+                    )
+                    facts.append(fact)
+        
+        return facts
+    
+    def _extract_sql_templates(self, content: str, source_file: str, var_map: dict) -> List[Fact]:
+        """Extract SQL from String.format() calls with variable resolution."""
+        facts = []
+        
+        # First, normalize string concatenations (handle multiline strings with +)
+        # "string1" + "string2" -> "string1string2"
+        content_normalized = content
+        # Remove line breaks and + between strings
+        content_normalized = re.sub(r'"\s*\+\s*\n\s*"', '', content_normalized)
+        content_normalized = re.sub(r'"\s*\+\s*"', '', content_normalized)
+        
+        # Pattern: String.format("template", args...)
+        format_pattern = re.compile(
+            r'String\.format\(\s*"([^"]+)"\s*,\s*([^)]+)\)',
+            re.DOTALL
+        )
+        
+        for match in format_pattern.finditer(content_normalized):
+            template = match.group(1)
+            args_str = match.group(2)
+            
+            # Split arguments - handle complex expressions
+            args = []
+            paren_depth = 0
+            current_arg = ""
+            for char in args_str:
+                if char == '(' :
+                    paren_depth += 1
+                    current_arg += char
+                elif char == ')':
+                    paren_depth -= 1
+                    current_arg += char
+                elif char == ',' and paren_depth == 0:
+                    args.append(current_arg.strip())
+                    current_arg = ""
+                else:
+                    current_arg += char
+            if current_arg.strip():
+                args.append(current_arg.strip())
+            
+            # Replace %s placeholders with resolved values or {varname}
+            resolved_sql = template
+            placeholder_idx = 0
+            
+            for arg in args:
+                if '%s' in resolved_sql:
+                    # Extract simple variable name (handle .toString(), .replace(), etc.)
+                    var_name = arg.split('.')[0].split('(')[0].strip()
+                    
+                    # Try to resolve from var_map
+                    if var_name in var_map:
+                        resolved_value = var_map[var_name]
+                        resolved_sql = resolved_sql.replace('%s', resolved_value, 1)
+                    else:
+                        # Use placeholder
+                        resolved_sql = resolved_sql.replace('%s', f'{{{var_name}}}', 1)
+                    placeholder_idx += 1
+            
+            # Extract table names from SQL
+            # Pattern: CREATE [EXTERNAL] TABLE schema.table
+            create_table_pattern = re.compile(r'CREATE\s+(?:EXTERNAL\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-zA-Z0-9_{}]+\.[a-zA-Z0-9_{}]+)', re.IGNORECASE)
+            for table_match in create_table_pattern.finditer(resolved_sql):
+                table_name = table_match.group(1)
+                fact = WriteFact(
+                    source_file=source_file,
+                    line_number=1,
+                    dataset_urn=f"hive:///{table_name}",
+                    dataset_type="hive",
+                    confidence=0.80,
+                    extraction_method=ExtractionMethod.REGEX,
+                    evidence=f"String.format CREATE TABLE {table_name}",
+                    has_placeholders='{' in table_name
+                )
+                facts.append(fact)
+            
+            # Pattern: INSERT OVERWRITE DIRECTORY 'path'
+            insert_dir_pattern = re.compile(r"INSERT\s+OVERWRITE\s+DIRECTORY\s+'([^']+)'", re.IGNORECASE)
+            for insert_match in insert_dir_pattern.finditer(resolved_sql):
+                path = insert_match.group(1)
+                fact = WriteFact(
+                    source_file=source_file,
+                    line_number=1,
+                    dataset_urn=path,
+                    dataset_type="hdfs",
+                    confidence=0.80,
+                    extraction_method=ExtractionMethod.REGEX,
+                    evidence=f"INSERT OVERWRITE DIRECTORY",
+                    has_placeholders='{' in path
+                )
+                facts.append(fact)
+            
+            # Pattern: FROM table
+            from_pattern = re.compile(r'FROM\s+([a-zA-Z0-9_{}]+\.[a-zA-Z0-9_{}]+)', re.IGNORECASE)
+            for from_match in from_pattern.finditer(resolved_sql):
+                table_name = from_match.group(1)
+                fact = ReadFact(
+                    source_file=source_file,
+                    line_number=1,
+                    dataset_urn=f"hive:///{table_name}",
+                    dataset_type="hive",
+                    confidence=0.80,
+                    extraction_method=ExtractionMethod.REGEX,
+                    evidence=f"FROM {table_name}",
+                    has_placeholders='{' in table_name
+                )
+                facts.append(fact)
+            
+            # Pattern: LOCATION 'path'
+            location_pattern = re.compile(r"LOCATION\s+'([^']+)'", re.IGNORECASE)
+            for loc_match in location_pattern.finditer(resolved_sql):
+                path = loc_match.group(1)
+                # LOCATION in CREATE TABLE is typically a read reference
+                fact = ReadFact(
+                    source_file=source_file,
+                    line_number=1,
+                    dataset_urn=path,
+                    dataset_type="hdfs",
+                    confidence=0.75,
+                    extraction_method=ExtractionMethod.REGEX,
+                    evidence=f"LOCATION",
+                    has_placeholders='{' in path
+                )
+                facts.append(fact)
         
         return facts
     
