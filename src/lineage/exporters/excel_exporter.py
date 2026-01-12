@@ -27,7 +27,7 @@ class ExcelExporter:
             raise ImportError("openpyxl is required for Excel export. Install with: pip install openpyxl")
     
     def _should_exclude_dataset(self, node) -> bool:
-        """Check if dataset should be excluded from reports (likely unresolved variable name)."""
+        """Check if dataset should be excluded from reports (only truly invalid entries)."""
         name = node.name.lower()
         urn = node.urn.lower()
         
@@ -35,18 +35,12 @@ class ExcelExporter:
         if '*' in name or '*' in urn:
             return True
         
-        # Skip unresolved variables (placeholders)
-        if '${' in name or '${' in urn or '$(' in name or '$(' in urn:
-            # But keep if it's marked as fully resolved in metadata
-            if not node.metadata.get('fully_resolved', False):
-                return True
-        
         # Skip temporary/staging paths
         temp_patterns = ['_tmp', '_temp', '_staging', '_checkpoint', '_success', '_logs', '_metadata']
         if any(pattern in name or pattern in urn for pattern in temp_patterns):
             return True
         
-        # Skip very generic names ONLY if they don't have meaningful URNs
+        # Skip very generic names
         generic_names = ['data', 'tmp', 'temp', 'staging', '-update']
         if name in generic_names:
             return True
@@ -55,66 +49,9 @@ class ExcelExporter:
         if len(name) < 3:
             return True
         
-        # Skip variable names that don't look like paths or tables
-        if not self._looks_like_dataset(name, urn, node):
-            return True
-        
-        return False
-    
-    def _looks_like_dataset(self, name: str, urn: str, node) -> bool:
-        """Check if name/URN looks like an actual dataset vs a variable identifier."""
-        # If it's a Hive table with schema.table format, it's valid
-        if '.' in name and node.metadata.get('dataset_type') == 'hive':
-            return True
-        
-        # If URN has a protocol/scheme, it's likely valid
-        if '://' in urn:
-            return True
-        
-        # If it has path separators, it's likely a path
-        if '/' in name or '\\' in name:
-            return True
-        
-        # If it has file extensions, it's likely a file
-        if '.' in name and any(ext in name for ext in ['.csv', '.json', '.parquet', '.orc', '.avro', '.txt']):
-            return True
-        
-        # Check for camelCase or variable-like patterns
-        if self._looks_like_variable_name(name):
-            return False
-        
-        # If name contains underscores and is all lowercase, it's likely valid
-        if '_' in name and name.islower():
-            return True
-        
-        # If it's very short (< 8 chars) and has no path indicators, likely a variable
-        if len(name) < 8 and '/' not in name and '.' not in name:
-            return False
-        
-        # Default: assume it's valid
-        return True
-    
-    def _looks_like_variable_name(self, name: str) -> bool:
-        """Check if name looks like a variable identifier (camelCase, etc.)."""
-        # Check for camelCase pattern
-        has_camel_case = any(
-            name[i].islower() and name[i+1].isupper() 
-            for i in range(len(name) - 1)
-        )
-        if has_camel_case:
-            return True
-        
-        # Check for common variable name patterns
-        variable_patterns = [
-            'dir', 'path', 'file', 'table', 'input', 'output', 
-            'source', 'target', 'dest', 'src', 'config', 'var',
-            'df', 'rdd', 'dataset', 'data', 'stream'
-        ]
-        
-        # If it ends with these common variable suffixes, it's likely a variable
-        for pattern in variable_patterns:
-            if name.endswith(pattern) and len(name) < 15:
-                return True
+        # KEEP unresolved variables like hdfsDir, inputPath, etc.
+        # Show them as "NA" or unresolved rather than hiding them
+        # This provides visibility that a dataset exists but couldn't be fully resolved
         
         return False
     

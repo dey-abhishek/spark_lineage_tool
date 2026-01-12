@@ -49,6 +49,12 @@ class LineageBuilder:
             # Resolve the URN
             resolved_urn, fully_resolved = self.resolver.resolve_path(dataset_urn)
             
+            # Additional check: if the URN looks like a bare variable name (no path separators, 
+            # no protocol, camelCase or ends with common variable suffixes), mark as not fully resolved
+            if fully_resolved and resolved_urn == dataset_urn:
+                if self._looks_like_variable_identifier(resolved_urn):
+                    fully_resolved = False
+            
             # Get facts for this dataset
             facts = self.fact_store.get_facts_by_dataset(dataset_urn)
             
@@ -68,6 +74,46 @@ class LineageBuilder:
             )
             
             self.graph.add_node(node)
+    
+    def _looks_like_variable_identifier(self, urn: str) -> bool:
+        """Check if URN looks like an unresolved variable identifier.
+        
+        Examples: hdfsDir, inputPath, outputTable, dataFrame
+        """
+        # Remove any protocol prefix
+        name = urn.split("://")[-1] if "://" in urn else urn
+        name = name.strip('/')
+        
+        # If it has path separators, it's likely a real path
+        if '/' in name or '\\' in name:
+            return False
+        
+        # If it has a file extension, it's likely a file
+        if '.' in name and any(ext in name for ext in ['.csv', '.json', '.parquet', '.orc', '.avro', '.txt', '.xml', '.yaml']):
+            return False
+        
+        # If it has schema.table format (single dot), it's likely a table
+        if name.count('.') == 1 and not name.startswith('.') and not name.endswith('.'):
+            return False
+        
+        # Check for camelCase (common in variable names)
+        has_camel_case = any(
+            name[i].islower() and name[i+1].isupper()
+            for i in range(len(name) - 1)
+        )
+        if has_camel_case:
+            return True
+        
+        # Check for common variable suffixes
+        variable_suffixes = ['dir', 'path', 'file', 'table', 'dataset', 'data', 'var', 'config']
+        if any(name.lower().endswith(suffix) for suffix in variable_suffixes) and len(name) < 20:
+            return True
+        
+        # Very short names without structure are likely variables
+        if len(name) < 8 and '_' not in name.lower():
+            return True
+        
+        return False
     
     def _create_job_nodes(self) -> None:
         """Create job nodes from source files."""
