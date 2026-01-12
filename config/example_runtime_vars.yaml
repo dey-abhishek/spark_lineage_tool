@@ -1,0 +1,39 @@
+# Example runtime variables for lineage resolution
+# These values will resolve placeholders in your scripts
+
+# Environment
+env: prod
+
+# Base paths
+base_path: /data/production
+warehouse_path: /data/warehouse
+hdfs_base: hdfs://namenode:8020/data
+
+# Runtime values
+run_date: "2024-01-15"
+date: "2024-01-15"
+RUNDATE: "2024-01-15"
+
+# Database names
+input_db: customer_db
+output_db: analytics_db
+staging_db: staging
+warehouse_db: warehouse
+
+# Table prefixes
+env_prefix: prod
+table_prefix: etl
+
+# Partition values
+year: "2024"
+month: "01"
+day: "15"
+
+# Job-specific
+batch_id: "batch_001"
+job_name: "etl_pipeline"
+
+# Shell script variables (common patterns)
+1: "2024-01-15"  # First positional argument
+2: "prod"        # Second positional argument
+

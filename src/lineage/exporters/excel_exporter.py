@@ -312,15 +312,16 @@ class ExcelExporter:
         # Header
         ws['A1'] = "Flattened Data for Analytics & Pivot Tables"
         ws['A1'].font = Font(size=14, bold=True)
-        ws.merge_cells('A1:N1')
+        ws.merge_cells('A1:P1')
         
         # Column headers - comprehensive for any analysis
         headers = [
             "Source File", "Source Type", "Source Job", 
-            "Relationship", "Target Dataset", "Dataset Type",
+            "Relationship", 
+            "Dataset Name", "Dataset URN/Path", "Dataset Type",
             "Confidence", "Wave", "Priority Score",
             "Fan In", "Fan Out", "Downstream Reach",
-            "Fully Resolved", "Evidence"
+            "Fully Resolved", "Schema.Table", "Evidence"
         ]
         for col, header in enumerate(headers, 1):
             cell = ws.cell(3, col, header)
@@ -368,6 +369,29 @@ class ExcelExporter:
             else:
                 source_type = 'Other'
             
+            # Get dataset details
+            dataset_name = dataset_node.name
+            dataset_urn = dataset_node.urn or dataset_name
+            dataset_type = dataset_node.metadata.get('dataset_type', 'unknown')
+            
+            # Extract schema.table format if it's a Hive table
+            schema_table = ""
+            if dataset_type in ['hive', 'table']:
+                # Check if name already has schema.table format
+                if '.' in dataset_name and not dataset_name.startswith('/'):
+                    schema_table = dataset_name
+                elif '.' in dataset_urn and not dataset_urn.startswith('/') and '://' not in dataset_urn:
+                    schema_table = dataset_urn
+            
+            # For file-based datasets, prefer URN (which has the full path)
+            display_urn = dataset_urn
+            if dataset_type in ['hdfs', 'file', 'local']:
+                # URN should have the full path
+                if dataset_urn and (dataset_urn.startswith('/') or '://' in dataset_urn):
+                    display_urn = dataset_urn
+                elif dataset_name.startswith('/') or '://' in dataset_name:
+                    display_urn = dataset_name
+            
             # Get metrics if available
             metrics = self.metrics.get(dataset_node.node_id, None)
             wave = metrics.migration_wave if metrics else 0
@@ -376,21 +400,32 @@ class ExcelExporter:
             fan_out = metrics.fan_out if metrics else 0
             reach = metrics.downstream_reach if metrics else 0
             
+            # Determine if fully resolved (no placeholders)
+            fully_resolved = dataset_node.metadata.get('fully_resolved', False)
+            if not fully_resolved:
+                # Check if URN has unresolved variables
+                if '${' in display_urn or '*' in display_urn:
+                    fully_resolved = False
+                else:
+                    fully_resolved = True
+            
             # Populate row
             ws.cell(row, 1, short_file)
             ws.cell(row, 2, source_type)
             ws.cell(row, 3, job_node.name)
             ws.cell(row, 4, relationship)
-            ws.cell(row, 5, dataset_node.name)
-            ws.cell(row, 6, dataset_node.metadata.get('dataset_type', 'unknown'))
-            ws.cell(row, 7, round(edge.confidence, 2))
-            ws.cell(row, 8, f"Wave {wave}" if wave > 0 else "N/A")
-            ws.cell(row, 9, priority)
-            ws.cell(row, 10, fan_in)
-            ws.cell(row, 11, fan_out)
-            ws.cell(row, 12, reach)
-            ws.cell(row, 13, "Yes" if dataset_node.metadata.get('fully_resolved', False) else "No")
-            ws.cell(row, 14, edge.evidence[:50] if edge.evidence else "")
+            ws.cell(row, 5, dataset_name)
+            ws.cell(row, 6, display_urn)
+            ws.cell(row, 7, dataset_type)
+            ws.cell(row, 8, round(edge.confidence, 2))
+            ws.cell(row, 9, f"Wave {wave}" if wave > 0 else "N/A")
+            ws.cell(row, 10, priority)
+            ws.cell(row, 11, fan_in)
+            ws.cell(row, 12, fan_out)
+            ws.cell(row, 13, reach)
+            ws.cell(row, 14, "Yes" if fully_resolved else "No")
+            ws.cell(row, 15, schema_table if schema_table else "N/A")
+            ws.cell(row, 16, edge.evidence[:50] if edge.evidence else "")
             
             # Color-code by confidence
             if edge.confidence >= 0.8:
@@ -399,7 +434,13 @@ class ExcelExporter:
                 fill_color = "FFEB9C"
             else:
                 fill_color = "FFC7CE"
-            ws.cell(row, 7).fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+            ws.cell(row, 8).fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+            
+            # Color-code fully resolved status
+            if fully_resolved:
+                ws.cell(row, 14).fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+            else:
+                ws.cell(row, 14).fill = PatternFill(start_color="FFF4E6", end_color="FFF4E6", fill_type="solid")
             
             row += 1
         
@@ -411,9 +452,9 @@ class ExcelExporter:
             "1. Create Pivot Table: Select all data → Insert → Pivot Table",
             "2. Count relationships per source: Rows=Source File, Values=Count of Relationship",
             "3. Analyze by type: Rows=Source Type, Columns=Relationship, Values=Count",
-            "4. Confidence analysis: Rows=Source File, Values=Average Confidence",
-            "5. Migration planning: Filter by Wave, group by Source File",
-            "6. Use Excel filters to drill down by any dimension"
+            "4. Dataset analysis: Use 'Dataset URN/Path' for file-based or 'Schema.Table' for tables",
+            "5. Filter 'Fully Resolved'=No to find datasets needing variable resolution",
+            "6. Group by 'Dataset Type' to analyze HDFS vs Hive vs JDBC separately"
         ]
         for instruction in instructions:
             ws.cell(row, 1, instruction)
@@ -421,11 +462,15 @@ class ExcelExporter:
             row += 1
         
         # Auto-size columns
-        for col in range(1, len(headers) + 1):
-            if col <= 3:
-                ws.column_dimensions[get_column_letter(col)].width = 30
-            else:
-                ws.column_dimensions[get_column_letter(col)].width = 15
+        ws.column_dimensions['A'].width = 30  # Source File
+        ws.column_dimensions['B'].width = 15  # Source Type
+        ws.column_dimensions['C'].width = 30  # Source Job
+        ws.column_dimensions['D'].width = 12  # Relationship
+        ws.column_dimensions['E'].width = 30  # Dataset Name
+        ws.column_dimensions['F'].width = 50  # Dataset URN/Path (wider for paths)
+        ws.column_dimensions['G'].width = 15  # Dataset Type
+        for col in range(8, len(headers) + 1):
+            ws.column_dimensions[get_column_letter(col)].width = 15
     
     def _create_datasets_sheet(self, wb: Workbook) -> None:
         """Create all datasets sheet."""
