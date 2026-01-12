@@ -52,6 +52,14 @@ def main(repo: str, config: str, out: str, hive_metastore: str, hdfs_namenode: s
     
     repo_path = Path(repo)
     output_dir = Path(out)
+    
+    # Clean up existing output directory if it exists
+    if output_dir.exists():
+        import shutil
+        console.print(f"[yellow]Cleaning up existing output directory: {output_dir}[/yellow]")
+        shutil.rmtree(output_dir)
+    
+    # Create fresh output directory
     output_dir.mkdir(parents=True, exist_ok=True)
     
     try:
