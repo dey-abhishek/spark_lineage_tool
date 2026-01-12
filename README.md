@@ -257,6 +257,313 @@ Built with:
 
 ---
 
+# Detailed Documentation
+
+## Architecture
+
+### Overview
+
+The Spark Lineage Tool is a comprehensive system for extracting and analyzing data lineage from Spark, Hive, Shell, and NiFi codebases.
+
+### Pipeline Architecture
+
+```
+Repository Files → Crawler → Type Detector → Extractors → IR Facts
+                                                             ↓
+Database Tables ← Exporters ← Scorer ← Lineage Builder ← Resolver
+```
+
+### Components
+
+#### 1. Crawler (`lineage.crawler`)
+- **FileCrawler**: Recursively scans repositories
+- **TypeDetector**: Identifies file types using extensions, shebangs, and content analysis
+
+#### 2. Extractors (`lineage.extractors`)
+Each extractor produces IR (Intermediate Representation) facts:
+
+- **PySparkExtractor**: AST-based Python parsing
+- **ScalaExtractor**: Regex-based Scala parsing
+- **HiveExtractor**: SQL parsing with sqlparse
+- **ShellExtractor**: Tokenization-based shell script parsing
+- **NiFiExtractor**: JSON parsing for NiFi flows
+- **ConfigExtractor**: Multi-format config file parsing
+
+#### 3. IR Layer (`lineage.ir`)
+- **Fact**: Base class for extracted facts
+- **FactType**: READ, WRITE, CONFIG, JOB_DEPENDENCY
+- **FactStore**: In-memory storage for facts
+
+#### 4. Resolution (`lineage.resolution`)
+- **SymbolTable**: Tracks variables from all sources
+- **VariableResolver**: Resolves ${var} and $VAR references
+- **PathCanonicalizer**: Normalizes HDFS paths and table names
+
+#### 5. Lineage Graph (`lineage.lineage`)
+- **Node**: Dataset, Job, or Module node
+- **Edge**: Relationship between nodes (READ, WRITE, PRODUCES, DEPENDS_ON)
+- **LineageGraph**: NetworkX-based graph structure
+- **LineageBuilder**: Constructs graph from facts
+
+#### 6. Scoring (`lineage.scoring`)
+- **ConfidenceScorer**: Calculates confidence based on extraction method
+- **PriorityCalculator**: Computes priority scores and migration waves
+
+#### 7. Exporters (`lineage.exporters`)
+- **JSONExporter**: Structured JSON output
+- **CSVExporter**: Flat CSV files for nodes/edges/metrics
+- **DatabaseExporter**: SQL database export
+- **HTMLExporter**: Interactive HTML report
+
+### Data Flow
+
+1. **Crawl**: Scan repository, detect file types
+2. **Extract**: Parse files, produce facts
+3. **Resolve**: Resolve variables, canonicalize paths
+4. **Build**: Construct lineage graph
+5. **Score**: Calculate confidence and priorities
+6. **Export**: Output to multiple formats
+
+### Extraction Methods
+
+#### AST-based (High Confidence: 0.85+)
+- Python: `ast` module
+- Scala: tree-sitter (planned)
+
+#### SQL Parsing (High Confidence: 0.85+)
+- sqlparse for Hive SQL
+- Detects table references in FROM, JOIN, INSERT, CREATE
+
+#### Regex-based (Medium Confidence: 0.60-0.75)
+- Pattern matching for API calls
+- Rule engine with YAML-defined patterns
+
+#### JSON Parsing (Medium Confidence: 0.70-0.80)
+- NiFi flow definitions
+- Config files
+
+---
+
+## Rule Engine
+
+The rule engine provides a flexible, data-driven approach to pattern extraction without hardcoding patterns in extractors.
+
+### Rule Format
+
+Rules are defined in YAML files with the following structure:
+
+```yaml
+rules:
+  - rule_id: unique_rule_identifier
+    applies_to: [file_type_1, file_type_2]  # pyspark, scala, hive, shell, nifi
+    pattern: 'regex_pattern_with_(?P<name>groups)'
+    action: RULE_ACTION
+    confidence: 0.75
+    description: "Human-readable description"
+    multiline: false  # Optional, default false
+    case_sensitive: true  # Optional, default true
+```
+
+### Rule Actions
+
+- `READ_HDFS_PATH`: Reading from HDFS path
+- `WRITE_HDFS_PATH`: Writing to HDFS path
+- `READ_HIVE_TABLE`: Reading from Hive table
+- `WRITE_HIVE_TABLE`: Writing to Hive table
+- `CONFIG_REFERENCE`: Configuration variable reference
+- `JOB_INVOCATION`: Job calling another job
+
+### Example Rules
+
+#### PySpark Read
+
+```yaml
+- rule_id: pyspark_read_parquet
+  applies_to: [pyspark]
+  pattern: '\.read\.parquet\(["\'](?P<path>[^"\']+)["\']\)'
+  action: READ_HDFS_PATH
+  confidence: 0.75
+  description: "Detect spark.read.parquet() calls"
+```
+
+#### Hive INSERT
+
+```yaml
+- rule_id: hive_insert_overwrite
+  applies_to: [hive]
+  pattern: 'INSERT\s+OVERWRITE\s+TABLE\s+(?P<table>[\w.]+)'
+  action: WRITE_HIVE_TABLE
+  confidence: 0.90
+  description: "Detect INSERT OVERWRITE TABLE statements"
+  case_sensitive: false
+```
+
+#### Shell HDFS Operations
+
+```yaml
+- rule_id: shell_hdfs_cp
+  applies_to: [shell]
+  pattern: 'hdfs\s+dfs\s+-cp\s+(?P<source>\S+)\s+(?P<target>\S+)'
+  action: WRITE_HDFS_PATH
+  confidence: 0.70
+  description: "Detect hdfs dfs -cp commands"
+```
+
+### Using the Rule Engine
+
+#### Loading Rules
+
+```python
+from lineage.rules import RuleEngine
+
+engine = RuleEngine()
+
+# Load default rules
+engine.load_default_rules()
+
+# Load custom rules
+engine.load_rules_from_yaml(Path("config/custom_rules.yaml"))
+```
+
+#### Applying Rules
+
+```python
+# Apply rules to text
+matches = engine.apply_rules(
+    text=file_content,
+    file_type="pyspark",
+    min_confidence=0.5
+)
+
+# Process matches
+for match in matches:
+    print(f"Rule: {match['rule_id']}")
+    print(f"Action: {match['action']}")
+    print(f"Groups: {match['groups']}")
+    print(f"Confidence: {match['confidence']}")
+```
+
+---
+
+## Examples and API Usage
+
+### Direct API Usage
+
+```python
+from pathlib import Path
+from lineage.crawler import FileCrawler
+from lineage.extractors import PySparkExtractor
+from lineage.ir import FactStore
+from lineage.rules import RuleEngine
+from lineage.resolution import SymbolTable, PathCanonicalizer, VariableResolver
+from lineage.lineage import LineageBuilder
+from lineage.scoring import PriorityCalculator
+from lineage.exporters import JSONExporter
+
+# Setup
+repo_path = Path("/path/to/repository")
+fact_store = FactStore()
+rule_engine = RuleEngine()
+rule_engine.load_default_rules()
+
+# Crawl and extract
+crawler = FileCrawler(repo_path)
+extractor = PySparkExtractor(rule_engine)
+
+for file in crawler.crawl():
+    facts = extractor.extract(file.path)
+    fact_store.add_facts(facts)
+
+# Resolve and build
+symbol_table = SymbolTable()
+resolver = VariableResolver(symbol_table, PathCanonicalizer())
+builder = LineageBuilder(fact_store, resolver)
+graph = builder.build()
+
+# Score and export
+priority_calc = PriorityCalculator(graph)
+metrics = priority_calc.calculate_all()
+
+exporter = JSONExporter()
+exporter.export(graph, metrics, Path("output/lineage.json"))
+```
+
+### Custom Extractor Example
+
+```python
+from pathlib import Path
+from typing import List
+from lineage.extractors.base import BaseExtractor
+from lineage.ir import Fact, ReadFact
+
+class CustomExtractor(BaseExtractor):
+    def extract(self, file_path: Path) -> List[Fact]:
+        """Extract from custom file format."""
+        facts = []
+        
+        with open(file_path, 'r') as f:
+            for line_num, line in enumerate(f, 1):
+                if "CUSTOM_READ:" in line:
+                    path = line.split("CUSTOM_READ:")[1].strip()
+                    fact = ReadFact(
+                        source_file=str(file_path),
+                        line_number=line_num,
+                        dataset_urn=path,
+                        dataset_type="hdfs",
+                        confidence=0.75
+                    )
+                    facts.append(fact)
+        
+        return facts
+```
+
+### Common Use Cases
+
+#### 1. Migration Assessment
+
+Identify high-priority datasets for migration:
+```bash
+lineage-scan --repo /legacy/codebase --out assessment/
+```
+
+Check Wave 1 datasets in `lineage_report.html` or `metrics.csv`.
+
+#### 2. Impact Analysis
+
+Find all downstream dependencies of a dataset:
+```python
+# After building graph
+dataset_node = graph.get_node_by_urn("hdfs:///data/raw/critical_data")
+downstream = graph.get_transitive_downstream(dataset_node.node_id)
+print(f"Impacted datasets: {len(downstream)}")
+```
+
+#### 3. Confidence Audit
+
+Find low-confidence edges that need manual review:
+```python
+low_confidence_edges = [
+    e for e in graph.edges if e.confidence < 0.6
+]
+```
+
+#### 4. Shell-to-Spark Migration
+
+Identify datasets only accessed by shell scripts:
+```python
+from lineage.scoring import PriorityCalculator
+
+calc = PriorityCalculator(graph)
+metrics = calc.calculate_all()
+
+shell_only = [
+    (node_id, m) for node_id, m in metrics.items()
+    if m.is_shell_only
+]
+```
+
+---
+
 **Status**: Production-ready MVP with comprehensive test coverage (>80%)  
 **Version**: 0.1.0  
 **Last Updated**: January 2026
