@@ -10,7 +10,7 @@ import sys
 from lineage.config import load_config, LineageConfig
 from lineage.crawler import FileCrawler, FileType
 from lineage.extractors import (
-    PySparkExtractor, ScalaExtractor, HiveExtractor,
+    PySparkExtractor, ScalaExtractor, JavaExtractor, HiveExtractor,
     ShellExtractor, NiFiExtractor, ConfigExtractor
 )
 from lineage.ir import FactStore
@@ -91,6 +91,7 @@ def main(repo: str, config: str, out: str, hive_metastore: str, hdfs_namenode: s
             extractors = {
                 FileType.PYSPARK: PySparkExtractor(rule_engine),
                 FileType.SCALA: ScalaExtractor(rule_engine),
+                FileType.JAVA: JavaExtractor(rule_engine),
                 FileType.HIVE: HiveExtractor(rule_engine),
                 FileType.SHELL: ShellExtractor(rule_engine),
                 FileType.NIFI: NiFiExtractor(),

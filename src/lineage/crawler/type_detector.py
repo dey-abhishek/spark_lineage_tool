@@ -11,6 +11,7 @@ class FileType(Enum):
     
     PYSPARK = "pyspark"
     SCALA = "scala"
+    JAVA = "java"
     HIVE = "hive"
     SHELL = "shell"
     NIFI = "nifi"
@@ -29,6 +30,7 @@ class TypeDetector:
     EXTENSION_MAP = {
         ".py": FileType.PYSPARK,
         ".scala": FileType.SCALA,
+        ".java": FileType.JAVA,
         ".hql": FileType.HIVE,
         ".sql": FileType.HIVE,
         ".sh": FileType.SHELL,
@@ -62,6 +64,14 @@ class TypeDetector:
             r"import org\.apache\.spark",
             r"object \w+ extends",
             r"class \w+ extends",
+        ],
+        FileType.JAVA: [
+            r"import org\.apache\.spark",
+            r"import org\.apache\.hadoop",
+            r"import org\.apache\.kafka",
+            r"public\s+class\s+\w+",
+            r"JavaSparkContext",
+            r"JavaRDD",
         ],
         FileType.HIVE: [
             r"^\s*(?:INSERT|SELECT|CREATE|DROP|ALTER)\s+",
