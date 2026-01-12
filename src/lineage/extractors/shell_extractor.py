@@ -150,23 +150,32 @@ class ShellExtractor(BaseExtractor):
         return facts
     
     def _resolve_date_expression(self, value: str) -> str:
-        """Resolve date command expressions to example values."""
-        # Pattern for $(date ...) or `date ...`
+        """Resolve date command expressions to actual current date values."""
+        from datetime import datetime
+        
+        # Get current date
+        now = datetime.now()
+        
+        # Pattern mappings to actual date formats
         date_patterns = [
-            (r'\$\(date\s+\+%Y-%m-%d\)', '2024-01-15'),  # ISO date
-            (r'`date\s+\+%Y-%m-%d`', '2024-01-15'),
-            (r'\$\(date\s+\+%Y%m%d\)', '20240115'),  # Compact date
-            (r'`date\s+\+%Y%m%d`', '20240115'),
-            (r'\$\(date\s+\+%Y\)', '2024'),  # Year only
-            (r'`date\s+\+%Y`', '2024'),
-            (r'\$\(date\s+\+%m\)', '01'),  # Month only
-            (r'`date\s+\+%m`', '01'),
-            (r'\$\(date\s+\+%d\)', '15'),  # Day only
-            (r'`date\s+\+%d`', '15'),
-            (r'\$\(date\s+\+%Y-%m\)', '2024-01'),  # Year-month
-            (r'`date\s+\+%Y-%m`', '2024-01'),
-            (r'\$\(date\)', '2024-01-15'),  # Default date format
-            (r'`date`', '2024-01-15'),
+            (r'\$\(date\s+\+%Y-%m-%d\)', now.strftime('%Y-%m-%d')),  # 2024-01-15
+            (r'`date\s+\+%Y-%m-%d`', now.strftime('%Y-%m-%d')),
+            (r'\$\(date\s+\+%Y%m%d\)', now.strftime('%Y%m%d')),  # 20240115
+            (r'`date\s+\+%Y%m%d`', now.strftime('%Y%m%d')),
+            (r'\$\(date\s+\+%Y\)', now.strftime('%Y')),  # 2024
+            (r'`date\s+\+%Y`', now.strftime('%Y')),
+            (r'\$\(date\s+\+%m\)', now.strftime('%m')),  # 01
+            (r'`date\s+\+%m`', now.strftime('%m')),
+            (r'\$\(date\s+\+%d\)', now.strftime('%d')),  # 15
+            (r'`date\s+\+%d`', now.strftime('%d')),
+            (r'\$\(date\s+\+%Y-%m\)', now.strftime('%Y-%m')),  # 2024-01
+            (r'`date\s+\+%Y-%m`', now.strftime('%Y-%m')),
+            (r'\$\(date\s+\+%Y/%m/%d\)', now.strftime('%Y/%m/%d')),  # 2024/01/15
+            (r'`date\s+\+%Y/%m/%d`', now.strftime('%Y/%m/%d')),
+            (r'\$\(date\s+\+%Y\.%m\.%d\)', now.strftime('%Y.%m.%d')),  # 2024.01.15
+            (r'`date\s+\+%Y\.%m\.%d`', now.strftime('%Y.%m.%d')),
+            (r'\$\(date\)', now.strftime('%Y-%m-%d')),  # Default
+            (r'`date`', now.strftime('%Y-%m-%d')),
         ]
         
         result = value
@@ -179,13 +188,25 @@ class ShellExtractor(BaseExtractor):
         def replace_param_date(match):
             param_num = match.group(1)
             date_format = match.group(2)
-            # Map common formats to examples
-            if '%Y-%m-%d' in date_format:
-                return '2024-01-15'
-            elif '%Y%m%d' in date_format:
-                return '20240115'
-            else:
-                return '2024-01-15'
+            # Convert shell date format to Python strftime format
+            format_str = date_format.strip()
+            if format_str.startswith('+'):
+                format_str = format_str[1:]  # Remove leading +
+            
+            # Map common shell formats to Python strftime
+            format_map = {
+                '%Y-%m-%d': '%Y-%m-%d',
+                '%Y%m%d': '%Y%m%d',
+                '%Y/%m/%d': '%Y/%m/%d',
+                '%Y.%m.%d': '%Y.%m.%d',
+                '%Y-%m': '%Y-%m',
+                '%Y': '%Y',
+                '%m': '%m',
+                '%d': '%d',
+            }
+            
+            python_format = format_map.get(format_str, '%Y-%m-%d')
+            return now.strftime(python_format)
         
         result = re.sub(param_date_pattern, replace_param_date, result)
         
