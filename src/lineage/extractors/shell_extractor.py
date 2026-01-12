@@ -169,8 +169,9 @@ class ShellExtractor(BaseExtractor):
         # Get current date
         now = datetime.now()
         
-        # Pattern mappings to actual date formats
+        # Pattern mappings to actual date formats (including timestamps)
         date_patterns = [
+            # Date only formats
             (r'\$\(date\s+\+%Y-%m-%d\)', now.strftime('%Y-%m-%d')),  # 2024-01-15
             (r'`date\s+\+%Y-%m-%d`', now.strftime('%Y-%m-%d')),
             (r'\$\(date\s+\+%Y%m%d\)', now.strftime('%Y%m%d')),  # 20240115
@@ -187,6 +188,40 @@ class ShellExtractor(BaseExtractor):
             (r'`date\s+\+%Y/%m/%d`', now.strftime('%Y/%m/%d')),
             (r'\$\(date\s+\+%Y\.%m\.%d\)', now.strftime('%Y.%m.%d')),  # 2024.01.15
             (r'`date\s+\+%Y\.%m\.%d`', now.strftime('%Y.%m.%d')),
+            
+            # Timestamp formats (Date + Time)
+            (r'\$\(date\s+\+%Y%m%d%H%M%S\)', now.strftime('%Y%m%d%H%M%S')),  # 20240115143025
+            (r'`date\s+\+%Y%m%d%H%M%S`', now.strftime('%Y%m%d%H%M%S')),
+            (r'\$\(date\s+\+%Y-%m-%d_%H-%M-%S\)', now.strftime('%Y-%m-%d_%H-%M-%S')),  # 2024-01-15_14-30-25
+            (r'`date\s+\+%Y-%m-%d_%H-%M-%S`', now.strftime('%Y-%m-%d_%H-%M-%S')),
+            (r'\$\(date\s+\+%Y-%m-%d_%H:%M:%S\)', now.strftime('%Y-%m-%d_%H:%M:%S')),  # 2024-01-15_14:30:25
+            (r'`date\s+\+%Y-%m-%d_%H:%M:%S`', now.strftime('%Y-%m-%d_%H:%M:%S')),
+            (r'\$\(date\s+\+%Y%m%d_%H%M%S\)', now.strftime('%Y%m%d_%H%M%S')),  # 20240115_143025
+            (r'`date\s+\+%Y%m%d_%H%M%S`', now.strftime('%Y%m%d_%H%M%S')),
+            
+            # ISO 8601 formats
+            (r'\$\(date\s+\+%Y-%m-%dT%H:%M:%S\)', now.strftime('%Y-%m-%dT%H:%M:%S')),  # 2024-01-15T14:30:25
+            (r'`date\s+\+%Y-%m-%dT%H:%M:%S`', now.strftime('%Y-%m-%dT%H:%M:%S')),
+            (r'\$\(date\s+\+%Y-%m-%dT%H:%M:%SZ\)', now.strftime('%Y-%m-%dT%H:%M:%S') + 'Z'),  # 2024-01-15T14:30:25Z
+            (r'`date\s+\+%Y-%m-%dT%H:%M:%SZ`', now.strftime('%Y-%m-%dT%H:%M:%S') + 'Z'),
+            
+            # Time only formats
+            (r'\$\(date\s+\+%H:%M:%S\)', now.strftime('%H:%M:%S')),  # 14:30:25
+            (r'`date\s+\+%H:%M:%S`', now.strftime('%H:%M:%S')),
+            (r'\$\(date\s+\+%H%M%S\)', now.strftime('%H%M%S')),  # 143025
+            (r'`date\s+\+%H%M%S`', now.strftime('%H%M%S')),
+            (r'\$\(date\s+\+%H\)', now.strftime('%H')),  # 14
+            (r'`date\s+\+%H`', now.strftime('%H')),
+            (r'\$\(date\s+\+%M\)', now.strftime('%M')),  # 30
+            (r'`date\s+\+%M`', now.strftime('%M')),
+            (r'\$\(date\s+\+%S\)', now.strftime('%S')),  # 25
+            (r'`date\s+\+%S`', now.strftime('%S')),
+            
+            # Unix timestamp
+            (r'\$\(date\s+\+%s\)', str(int(now.timestamp()))),  # 1705330225
+            (r'`date\s+\+%s`', str(int(now.timestamp()))),
+            
+            # Default
             (r'\$\(date\)', now.strftime('%Y-%m-%d')),  # Default
             (r'`date`', now.strftime('%Y-%m-%d')),
         ]
@@ -206,12 +241,28 @@ class ShellExtractor(BaseExtractor):
                 return 'YYYY-MM-DD'
             elif format_spec == '%Y%m%d':
                 return 'YYYYMMDD'
+            elif format_spec == '%Y%m%d%H%M%S':
+                return 'YYYYMMDDHHMMSS'
+            elif '%Y-%m-%d_%H-%M-%S' in format_spec:
+                return 'YYYY-MM-DD_HH-MM-SS'
+            elif '%Y-%m-%d_%H:%M:%S' in format_spec:
+                return 'YYYY-MM-DD_HH:MM:SS'
+            elif '%Y%m%d_%H%M%S' in format_spec:
+                return 'YYYYMMDD_HHMMSS'
+            elif '%Y-%m-%dT%H:%M:%S' in format_spec:
+                return 'YYYY-MM-DDTHH:MM:SS'
             elif format_spec == '%Y':
                 return 'YYYY'
             elif format_spec == '%m':
                 return 'MM'
             elif format_spec == '%d':
                 return 'DD'
+            elif format_spec == '%H:%M:%S':
+                return 'HH:MM:SS'
+            elif format_spec == '%H%M%S':
+                return 'HHMMSS'
+            elif format_spec == '%s':
+                return 'UNIX_TIMESTAMP'
             else:
                 return f'DATE_{format_spec.replace("%", "")}'
         result = re.sub(date_arithmetic_pattern, replace_date_arithmetic, result)

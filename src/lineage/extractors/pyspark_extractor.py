@@ -136,6 +136,20 @@ class PySparkASTVisitor(ast.NodeVisitor):
                             confidence=0.85
                         )
                         self.facts.append(fact)
+                    else:
+                        # Check for datetime.now().strftime() patterns
+                        datetime_value = self._extract_datetime_call(node.value)
+                        if datetime_value:
+                            fact = ConfigFact(
+                                source_file=self.source_file,
+                                line_number=node.lineno,
+                                config_key=var_name,
+                                config_value=datetime_value,
+                                config_source="datetime_now",
+                                extraction_method=ExtractionMethod.AST,
+                                confidence=0.90
+                            )
+                            self.facts.append(fact)
         
         self.generic_visit(node)
     
@@ -265,6 +279,40 @@ class PySparkASTVisitor(ast.NodeVisitor):
                 default_arg = node.args[1]
                 if isinstance(default_arg, ast.Constant):
                     return str(default_arg.value)
+        
+        return None
+    
+    def _extract_datetime_call(self, node: ast.Call) -> Optional[str]:
+        """Extract datetime value from datetime.now().strftime() calls.
+        
+        Handles:
+            datetime.now().strftime('%Y-%m-%d')
+            datetime.datetime.now().strftime('%Y%m%d%H%M%S')
+            datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        """
+        from datetime import datetime
+        
+        # Check if it's a strftime() call
+        if isinstance(node.func, ast.Attribute) and node.func.attr == 'strftime':
+            # Get the format string (first argument)
+            if len(node.args) > 0 and isinstance(node.args[0], ast.Constant):
+                format_str = node.args[0].value
+                
+                # Check if it's called on datetime.now() or datetime.datetime.now()
+                if isinstance(node.func.value, ast.Call):
+                    call_chain = self._extract_call_chain(node.func.value)
+                    
+                    # datetime.now() or datetime.datetime.now()
+                    if (call_chain == ['datetime', 'now'] or 
+                        call_chain == ['datetime', 'datetime', 'now']):
+                        # Convert format to actual value
+                        try:
+                            now = datetime.now()
+                            resolved_value = now.strftime(format_str)
+                            return resolved_value
+                        except:
+                            # If format string is invalid, return a placeholder
+                            return f"DATETIME_{format_str.replace('%', '')}"
         
         return None
     

@@ -20,8 +20,9 @@ class VariableResolver:
         
         # Patterns for variable references
         self.patterns = [
-            re.compile(r'\$\{([^}]+)\}'),  # ${var}
-            re.compile(r'\$([A-Z_][A-Z0-9_]*)'),  # $VAR
+            re.compile(r'\$\{([^}]+)\}'),  # ${var} - braced variables
+            re.compile(r'\$([A-Z_][A-Z0-9_]*)'),  # $VAR - uppercase environment-style
+            re.compile(r'\$([a-z][a-zA-Z0-9_]*)'),  # $var - lowercase/camelCase (Scala style)
         ]
     
     def resolve(self, text: str, max_iterations: int = 10) -> tuple[str, bool]:

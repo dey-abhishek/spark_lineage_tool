@@ -210,7 +210,7 @@ class ScalaExtractor(BaseExtractor):
         """Extract variable definitions from Scala code (val/var name = "value")."""
         facts = []
         
-        # Pattern to match val/var assignments with string literals
+        # Pattern 1: Simple string literals
         # Matches: val sourceDb = "prod_db", var env = "prod"
         var_pattern = re.compile(r'^\s*(?:val|var)\s+(\w+)\s*=\s*"([^"]+)"', re.MULTILINE)
         
@@ -231,7 +231,98 @@ class ScalaExtractor(BaseExtractor):
             )
             facts.append(fact)
         
+        # Pattern 2: Conditional with default value (common pattern)
+        # Matches: val runDate = if (args.length > 0) args(0) else "2024-01-01"
+        #          val env = if (args.length > 1) args(1) else "prod"
+        conditional_pattern = re.compile(
+            r'(?:val|var)\s+(\w+)\s*=\s*if.*?else\s*"([^"]+)"',
+            re.DOTALL
+        )
+        
+        for match in conditional_pattern.finditer(content):
+            var_name = match.group(1)
+            default_value = match.group(2).strip()
+            line_number = content[:match.start()].count("\n") + 1
+            
+            # Create a ConfigFact for the default value
+            fact = ConfigFact(
+                source_file=source_file,
+                line_number=line_number,
+                config_key=var_name,
+                config_value=default_value,
+                config_source="scala_conditional_default",
+                extraction_method=ExtractionMethod.REGEX,
+                confidence=0.85  # Slightly lower since it's conditional
+            )
+            facts.append(fact)
+        
+        # Pattern 3: DateTime formatting patterns
+        # Matches: val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
+        #          val timestamp = new SimpleDateFormat("yyyy-MM-dd_HH-mm-ss").format(new Date())
+        # For static analysis, we resolve to current timestamp
+        datetime_patterns = [
+            # LocalDateTime patterns
+            (r'(?:val|var)\s+(\w+)\s*=\s*LocalDateTime\.now\(\)\.format\([^"]*"([^"]+)"', 'localdatetime'),
+            # SimpleDateFormat patterns (assignment on different line)
+            (r'(?:val|var)\s+(\w+)\s*=\s*new\s+SimpleDateFormat\("([^"]+)"\)\.format', 'simpledateformat'),
+            # SimpleDateFormat patterns (variable then format)
+            (r'(?:val|var)\s+(\w+)\s*=\s*\w+\.format\([^)]*\)', 'simpledateformat_var'),
+        ]
+        
+        from datetime import datetime
+        now = datetime.now()
+        
+        for pattern_regex, pattern_type in datetime_patterns:
+            pattern = re.compile(pattern_regex, re.DOTALL)
+            for match in pattern.finditer(content):
+                var_name = match.group(1)
+                format_str = match.group(2).strip()
+                line_number = content[:match.start()].count("\n") + 1
+                
+                # Convert Java/Scala date format to Python strftime format
+                resolved_value = self._resolve_datetime_format(format_str, now)
+                
+                fact = ConfigFact(
+                    source_file=source_file,
+                    line_number=line_number,
+                    config_key=var_name,
+                    config_value=resolved_value,
+                    config_source=f"scala_{pattern_type}",
+                    extraction_method=ExtractionMethod.REGEX,
+                    confidence=0.88
+                )
+                facts.append(fact)
+        
         return facts
+    
+    def _resolve_datetime_format(self, java_format: str, dt: 'datetime') -> str:
+        """Convert Java/Scala date format to actual value.
+        
+        Java/Scala formats:
+            yyyy-MM-dd -> 2024-01-15
+            yyyyMMddHHmmss -> 20240115143025
+            yyyy-MM-dd_HH-mm-ss -> 2024-01-15_14-30-25
+        """
+        # Map Java format characters to Python strftime
+        format_map = {
+            'yyyy': '%Y',
+            'yy': '%y',
+            'MM': '%m',
+            'dd': '%d',
+            'HH': '%H',
+            'mm': '%M',
+            'ss': '%S',
+        }
+        
+        python_format = java_format
+        for java_fmt, python_fmt in format_map.items():
+            python_format = python_format.replace(java_fmt, python_fmt)
+        
+        try:
+            return dt.strftime(python_format)
+        except:
+            # If conversion fails, return placeholder
+            return f"TIMESTAMP_{java_format}"
     
     def _remove_comments(self, content: str) -> str:
         """Remove Scala comments."""
