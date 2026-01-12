@@ -18,6 +18,7 @@ class PySparkASTVisitor(ast.NodeVisitor):
         self.source_file = source_file
         self.facts: List[Fact] = []
         self.variables: dict[str, Any] = {}  # Track variable assignments
+        self.function_params: dict[str, Optional[str]] = {}  # Track function parameters with defaults
     
     def visit_Call(self, node: ast.Call) -> None:
         """Visit function call nodes."""
@@ -87,8 +88,149 @@ class PySparkASTVisitor(ast.NodeVisitor):
                         confidence=0.95
                     )
                     self.facts.append(fact)
+                
+                # Handle f-string assignments: base_path = f"/data/{env}"
+                # where env might be a function parameter or previously assigned variable
+                elif isinstance(node.value, ast.JoinedStr):
+                    # Try to resolve the f-string if we have the variable values
+                    resolved_value = self._try_resolve_fstring(node.value)
+                    if resolved_value:
+                        fact = ConfigFact(
+                            source_file=self.source_file,
+                            line_number=node.lineno,
+                            config_key=var_name,
+                            config_value=resolved_value,
+                            config_source="python_fstring",
+                            extraction_method=ExtractionMethod.AST,
+                            confidence=0.85  # Lower confidence for f-strings
+                        )
+                        self.facts.append(fact)
+                
+                # Handle sys.argv with defaults: run_date = sys.argv[1] if len(sys.argv) > 1 else "2024-01-15"
+                elif isinstance(node.value, ast.IfExp):
+                    # Check if it's a sys.argv pattern with default
+                    default_value = self._extract_argv_default(node.value)
+                    if default_value:
+                        fact = ConfigFact(
+                            source_file=self.source_file,
+                            line_number=node.lineno,
+                            config_key=var_name,
+                            config_value=default_value,
+                            config_source="argv_default",
+                            extraction_method=ExtractionMethod.AST,
+                            confidence=0.80
+                        )
+                        self.facts.append(fact)
         
         self.generic_visit(node)
+    
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        """Visit function definitions to extract parameters with defaults."""
+        # Extract function parameters and their default values
+        defaults = node.args.defaults
+        args = node.args.args
+        
+        # Match args with defaults (defaults are right-aligned)
+        num_defaults = len(defaults)
+        for i, arg in enumerate(args):
+            param_name = arg.arg
+            default_value = None
+            
+            # Check if this arg has a default value
+            if i >= len(args) - num_defaults:
+                default_idx = i - (len(args) - num_defaults)
+                default_node = defaults[default_idx]
+                
+                # Extract default value if it's a constant
+                if isinstance(default_node, ast.Constant):
+                    default_value = str(default_node.value)
+            
+            # Store parameter info
+            self.function_params[param_name] = default_value
+            
+            # If parameter has a default value, create a ConfigFact
+            if default_value is not None:
+                fact = ConfigFact(
+                    source_file=self.source_file,
+                    line_number=node.lineno,
+                    config_key=param_name,
+                    config_value=default_value,
+                    config_source="function_parameter_default",
+                    extraction_method=ExtractionMethod.AST,
+                    confidence=0.80  # Medium confidence for defaults
+                )
+                self.facts.append(fact)
+        
+        # Continue visiting function body
+        self.generic_visit(node)
+    
+    def _try_resolve_fstring(self, fstring_node: ast.JoinedStr) -> Optional[str]:
+        """Try to resolve an f-string by substituting known variables."""
+        parts = []
+        fully_resolved = True
+        
+        for value in fstring_node.values:
+            if isinstance(value, ast.Constant):
+                # String literal part
+                parts.append(str(value.value))
+            elif isinstance(value, ast.FormattedValue):
+                # Variable part in f-string: {var}
+                var_value = self._extract_fstring_variable(value.value)
+                if var_value:
+                    parts.append(var_value)
+                else:
+                    # Can't resolve this variable, keep placeholder
+                    var_name = self._get_variable_name(value.value)
+                    parts.append(f"${{{var_name}}}")
+                    fully_resolved = False
+            else:
+                fully_resolved = False
+        
+        if parts:
+            resolved = "".join(parts)
+            # Only return if we resolved something useful
+            if fully_resolved or "${" in resolved:
+                return resolved
+        
+        return None
+    
+    def _extract_fstring_variable(self, node) -> Optional[str]:
+        """Extract variable value from f-string formatted value."""
+        if isinstance(node, ast.Name):
+            var_name = node.id
+            # Check if we have this variable's value
+            if var_name in self.variables:
+                var_node = self.variables[var_name]
+                if isinstance(var_node, ast.Constant):
+                    return str(var_node.value)
+            # Check function parameters with defaults
+            if var_name in self.function_params:
+                default_val = self.function_params[var_name]
+                if default_val:
+                    return default_val
+        return None
+    
+    def _get_variable_name(self, node) -> str:
+        """Get variable name from AST node."""
+        if isinstance(node, ast.Name):
+            return node.id
+        elif isinstance(node, ast.Attribute):
+            parts = []
+            current = node
+            while isinstance(current, ast.Attribute):
+                parts.insert(0, current.attr)
+                current = current.value
+            if isinstance(current, ast.Name):
+                parts.insert(0, current.id)
+            return ".".join(parts)
+        return "unknown"
+    
+    def _extract_argv_default(self, node: ast.IfExp) -> Optional[str]:
+        """Extract default value from sys.argv pattern: sys.argv[1] if len(sys.argv) > 1 else 'default'"""
+        # The orelse branch contains the default value
+        if isinstance(node.orelse, ast.Constant):
+            return str(node.orelse.value)
+        return None
     
     def _extract_call_chain(self, node: ast.Call) -> List[str]:
         """Extract method/attribute call chain."""

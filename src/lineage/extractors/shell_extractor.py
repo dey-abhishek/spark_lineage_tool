@@ -127,19 +127,69 @@ class ShellExtractor(BaseExtractor):
             value = match.group(3).strip()
             line_number = content[:match.start()].count("\n") + 1
             
+            # Try to resolve date expressions like $(date +%Y-%m-%d) or `date +%Y-%m-%d`
+            resolved_value = self._resolve_date_expression(value)
+            confidence = 0.85
+            
+            # Lower confidence if it still contains unresolved placeholders
+            if "${" in resolved_value or "$(" in resolved_value:
+                confidence = 0.70
+            
             # Create a ConfigFact for the variable definition
             fact = ConfigFact(
                 source_file=source_file,
                 line_number=line_number,
                 config_key=var_name,
-                config_value=value,
+                config_value=resolved_value,
                 config_source="shell_export",
                 extraction_method=ExtractionMethod.REGEX,
-                confidence=0.85
+                confidence=confidence
             )
             facts.append(fact)
         
         return facts
+    
+    def _resolve_date_expression(self, value: str) -> str:
+        """Resolve date command expressions to example values."""
+        # Pattern for $(date ...) or `date ...`
+        date_patterns = [
+            (r'\$\(date\s+\+%Y-%m-%d\)', '2024-01-15'),  # ISO date
+            (r'`date\s+\+%Y-%m-%d`', '2024-01-15'),
+            (r'\$\(date\s+\+%Y%m%d\)', '20240115'),  # Compact date
+            (r'`date\s+\+%Y%m%d`', '20240115'),
+            (r'\$\(date\s+\+%Y\)', '2024'),  # Year only
+            (r'`date\s+\+%Y`', '2024'),
+            (r'\$\(date\s+\+%m\)', '01'),  # Month only
+            (r'`date\s+\+%m`', '01'),
+            (r'\$\(date\s+\+%d\)', '15'),  # Day only
+            (r'`date\s+\+%d`', '15'),
+            (r'\$\(date\s+\+%Y-%m\)', '2024-01'),  # Year-month
+            (r'`date\s+\+%Y-%m`', '2024-01'),
+            (r'\$\(date\)', '2024-01-15'),  # Default date format
+            (r'`date`', '2024-01-15'),
+        ]
+        
+        result = value
+        for pattern, replacement in date_patterns:
+            result = re.sub(pattern, replacement, result)
+        
+        # Handle ${1:-$(date ...)} pattern - parameter with date default
+        # Extract the date part and resolve it
+        param_date_pattern = r'\$\{(\d+):-\$\(date\s+([^)]+)\)\}'
+        def replace_param_date(match):
+            param_num = match.group(1)
+            date_format = match.group(2)
+            # Map common formats to examples
+            if '%Y-%m-%d' in date_format:
+                return '2024-01-15'
+            elif '%Y%m%d' in date_format:
+                return '20240115'
+            else:
+                return '2024-01-15'
+        
+        result = re.sub(param_date_pattern, replace_param_date, result)
+        
+        return result
     
     def _extract_hdfs_ops(self, content: str, source_file: str) -> List[Fact]:
         """Extract HDFS operations."""
