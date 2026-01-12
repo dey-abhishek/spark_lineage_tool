@@ -8,6 +8,7 @@ try:
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
+    from openpyxl.comments import Comment
     EXCEL_AVAILABLE = True
 except ImportError:
     EXCEL_AVAILABLE = False
@@ -32,6 +33,8 @@ class ExcelExporter:
         # Create sheets
         self._create_summary_sheet(wb)
         self._create_priority_sheet(wb)
+        self._create_source_analysis_sheet(wb)
+        self._create_pivot_ready_sheet(wb)
         self._create_datasets_sheet(wb)
         self._create_jobs_sheet(wb)
         self._create_lineage_sheet(wb)
@@ -155,6 +158,274 @@ class ExcelExporter:
         # Auto-size columns
         for col in range(1, 8):
             ws.column_dimensions[get_column_letter(col)].width = 18
+    
+    def _create_source_analysis_sheet(self, wb: Workbook) -> None:
+        """Create source analysis sheet showing relationships per source."""
+        ws = wb.create_sheet("Source Analysis")
+        
+        # Header
+        ws['A1'] = "Lineage Relationships by Source"
+        ws['A1'].font = Font(size=14, bold=True)
+        ws.merge_cells('A1:H1')
+        
+        # Column headers
+        headers = ["Source File/System", "Type", "Datasets Read", "Datasets Written", 
+                   "Total Relationships", "Avg Confidence", "Languages", "Status"]
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(3, col, header)
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        
+        # Aggregate data by source
+        source_stats = {}
+        
+        # Analyze jobs
+        for node in self.graph.get_nodes_by_type(NodeType.JOB):
+            source_file = node.metadata.get('source_file', 'Unknown')
+            
+            # Determine type from file extension
+            if source_file.endswith('.py'):
+                source_type = 'PySpark'
+            elif source_file.endswith('.scala'):
+                source_type = 'Scala Spark'
+            elif source_file.endswith('.hql') or source_file.endswith('.sql'):
+                source_type = 'Hive SQL'
+            elif source_file.endswith('.sh'):
+                source_type = 'Shell Script'
+            elif source_file.endswith('.json'):
+                source_type = 'NiFi Flow'
+            else:
+                source_type = 'Other'
+            
+            if source_file not in source_stats:
+                source_stats[source_file] = {
+                    'type': source_type,
+                    'reads': set(),
+                    'writes': set(),
+                    'confidences': [],
+                    'languages': set([source_type])
+                }
+            
+            # Count reads and writes
+            for edge in self.graph.edges:
+                if edge.source_node_id == node.node_id:
+                    # This job writes to something
+                    target = self.graph.get_node_by_id(edge.target_node_id)
+                    if target and target.node_type == NodeType.DATASET:
+                        source_stats[source_file]['writes'].add(target.name)
+                        source_stats[source_file]['confidences'].append(edge.confidence)
+                
+                if edge.target_node_id == node.node_id:
+                    # This job reads from something
+                    source = self.graph.get_node_by_id(edge.source_node_id)
+                    if source and source.node_type == NodeType.DATASET:
+                        source_stats[source_file]['reads'].add(source.name)
+                        source_stats[source_file]['confidences'].append(edge.confidence)
+        
+        # Sort by total relationships
+        sorted_sources = sorted(
+            source_stats.items(),
+            key=lambda x: len(x[1]['reads']) + len(x[1]['writes']),
+            reverse=True
+        )
+        
+        # Populate data
+        row = 4
+        for source_file, stats in sorted_sources:
+            total_rels = len(stats['reads']) + len(stats['writes'])
+            avg_conf = sum(stats['confidences']) / len(stats['confidences']) if stats['confidences'] else 0
+            
+            # Determine status
+            if avg_conf >= 0.8:
+                status = "✓ High Confidence"
+                status_color = "C6EFCE"  # Green
+            elif avg_conf >= 0.6:
+                status = "⚠ Medium Confidence"
+                status_color = "FFEB9C"  # Yellow
+            else:
+                status = "✗ Low Confidence"
+                status_color = "FFC7CE"  # Red
+            
+            # Short name for display
+            short_name = source_file.split('/')[-1] if '/' in source_file else source_file
+            
+            ws.cell(row, 1, short_name)
+            ws.cell(row, 1).hyperlink = f"#'All Jobs'!A1"  # Link to jobs sheet
+            ws.cell(row, 1).font = Font(color="0563C1", underline="single")
+            ws.cell(row, 2, stats['type'])
+            ws.cell(row, 3, len(stats['reads']))
+            ws.cell(row, 4, len(stats['writes']))
+            ws.cell(row, 5, total_rels)
+            ws.cell(row, 6, round(avg_conf, 2))
+            ws.cell(row, 7, ', '.join(sorted(stats['languages'])))
+            ws.cell(row, 8, status)
+            
+            # Color-code status
+            ws.cell(row, 8).fill = PatternFill(start_color=status_color, end_color=status_color, fill_type="solid")
+            
+            # Add tooltip with full path
+            ws.cell(row, 1).comment = Comment(f"Full path: {source_file}", "Lineage Tool")
+            
+            row += 1
+        
+        # Add summary statistics at the bottom
+        row += 2
+        ws.cell(row, 1, "Summary Statistics").font = Font(bold=True, size=12)
+        row += 1
+        
+        total_sources = len(source_stats)
+        total_pyspark = sum(1 for s in source_stats.values() if 'PySpark' in s['type'])
+        total_scala = sum(1 for s in source_stats.values() if 'Scala' in s['type'])
+        total_hive = sum(1 for s in source_stats.values() if 'Hive' in s['type'])
+        total_shell = sum(1 for s in source_stats.values() if 'Shell' in s['type'])
+        
+        summary_data = [
+            ("Total Source Files", total_sources),
+            ("PySpark Jobs", total_pyspark),
+            ("Scala Spark Jobs", total_scala),
+            ("Hive SQL Scripts", total_hive),
+            ("Shell Scripts", total_shell),
+        ]
+        
+        ws.cell(row, 1, "Category").font = Font(bold=True)
+        ws.cell(row, 2, "Count").font = Font(bold=True)
+        for cat, count in summary_data:
+            row += 1
+            ws.cell(row, 1, cat)
+            ws.cell(row, 2, count)
+        
+        # Auto-size columns
+        ws.column_dimensions['A'].width = 35
+        ws.column_dimensions['B'].width = 15
+        ws.column_dimensions['C'].width = 15
+        ws.column_dimensions['D'].width = 15
+        ws.column_dimensions['E'].width = 18
+        ws.column_dimensions['F'].width = 15
+        ws.column_dimensions['G'].width = 20
+        ws.column_dimensions['H'].width = 20
+    
+    def _create_pivot_ready_sheet(self, wb: Workbook) -> None:
+        """Create a flattened sheet perfect for pivot tables and analytics."""
+        ws = wb.create_sheet("Analytics (Pivot-Ready)")
+        
+        # Header
+        ws['A1'] = "Flattened Data for Analytics & Pivot Tables"
+        ws['A1'].font = Font(size=14, bold=True)
+        ws.merge_cells('A1:N1')
+        
+        # Column headers - comprehensive for any analysis
+        headers = [
+            "Source File", "Source Type", "Source Job", 
+            "Relationship", "Target Dataset", "Dataset Type",
+            "Confidence", "Wave", "Priority Score",
+            "Fan In", "Fan Out", "Downstream Reach",
+            "Fully Resolved", "Evidence"
+        ]
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(3, col, header)
+            self._style_header_row(ws, 3, len(headers))
+        
+        # Flatten all relationships
+        row = 4
+        for edge in self.graph.edges:
+            # Get source (job) and target (dataset)
+            source_node = self.graph.get_node_by_id(edge.source_node_id)
+            target_node = self.graph.get_node_by_id(edge.target_node_id)
+            
+            if not source_node or not target_node:
+                continue
+            
+            # For dataset-to-dataset edges, skip (we focus on job-to-dataset)
+            if source_node.node_type == NodeType.DATASET and target_node.node_type == NodeType.DATASET:
+                continue
+            
+            # Determine job and dataset
+            if source_node.node_type == NodeType.JOB:
+                job_node = source_node
+                dataset_node = target_node
+                relationship = "WRITE"
+            elif target_node.node_type == NodeType.JOB:
+                job_node = target_node
+                dataset_node = source_node
+                relationship = "READ"
+            else:
+                continue
+            
+            # Extract details
+            source_file = job_node.metadata.get('source_file', 'Unknown')
+            short_file = source_file.split('/')[-1] if '/' in source_file else source_file
+            
+            # Determine source type
+            if source_file.endswith('.py'):
+                source_type = 'PySpark'
+            elif source_file.endswith('.scala'):
+                source_type = 'Scala'
+            elif source_file.endswith('.hql') or source_file.endswith('.sql'):
+                source_type = 'Hive SQL'
+            elif source_file.endswith('.sh'):
+                source_type = 'Shell'
+            else:
+                source_type = 'Other'
+            
+            # Get metrics if available
+            metrics = self.metrics.get(dataset_node.node_id, None)
+            wave = metrics.migration_wave if metrics else 0
+            priority = round(metrics.priority_score, 2) if metrics else 0
+            fan_in = metrics.fan_in if metrics else 0
+            fan_out = metrics.fan_out if metrics else 0
+            reach = metrics.downstream_reach if metrics else 0
+            
+            # Populate row
+            ws.cell(row, 1, short_file)
+            ws.cell(row, 2, source_type)
+            ws.cell(row, 3, job_node.name)
+            ws.cell(row, 4, relationship)
+            ws.cell(row, 5, dataset_node.name)
+            ws.cell(row, 6, dataset_node.metadata.get('dataset_type', 'unknown'))
+            ws.cell(row, 7, round(edge.confidence, 2))
+            ws.cell(row, 8, f"Wave {wave}" if wave > 0 else "N/A")
+            ws.cell(row, 9, priority)
+            ws.cell(row, 10, fan_in)
+            ws.cell(row, 11, fan_out)
+            ws.cell(row, 12, reach)
+            ws.cell(row, 13, "Yes" if dataset_node.metadata.get('fully_resolved', False) else "No")
+            ws.cell(row, 14, edge.evidence[:50] if edge.evidence else "")
+            
+            # Color-code by confidence
+            if edge.confidence >= 0.8:
+                fill_color = "C6EFCE"
+            elif edge.confidence >= 0.6:
+                fill_color = "FFEB9C"
+            else:
+                fill_color = "FFC7CE"
+            ws.cell(row, 7).fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+            
+            row += 1
+        
+        # Add instructions
+        row += 2
+        ws.cell(row, 1, "How to Use This Sheet for Analytics:").font = Font(bold=True, size=11, color="0563C1")
+        row += 1
+        instructions = [
+            "1. Create Pivot Table: Select all data → Insert → Pivot Table",
+            "2. Count relationships per source: Rows=Source File, Values=Count of Relationship",
+            "3. Analyze by type: Rows=Source Type, Columns=Relationship, Values=Count",
+            "4. Confidence analysis: Rows=Source File, Values=Average Confidence",
+            "5. Migration planning: Filter by Wave, group by Source File",
+            "6. Use Excel filters to drill down by any dimension"
+        ]
+        for instruction in instructions:
+            ws.cell(row, 1, instruction)
+            ws.merge_cells(f'A{row}:D{row}')
+            row += 1
+        
+        # Auto-size columns
+        for col in range(1, len(headers) + 1):
+            if col <= 3:
+                ws.column_dimensions[get_column_letter(col)].width = 30
+            else:
+                ws.column_dimensions[get_column_letter(col)].width = 15
     
     def _create_datasets_sheet(self, wb: Workbook) -> None:
         """Create all datasets sheet."""
