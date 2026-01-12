@@ -9,11 +9,11 @@ Tests timestamp extraction and resolution for:
 
 import pytest
 from datetime import datetime
-from src.lineage.extractors.shell_extractor import ShellExtractor
-from src.lineage.extractors.pyspark_extractor import PySparkExtractor
-from src.lineage.extractors.scala_extractor import ScalaExtractor
-from src.lineage.resolution.resolver import VariableResolver
-from src.lineage.resolution.symbol_table import SymbolTable, Symbol
+from lineage.extractors.shell_extractor import ShellExtractor
+from lineage.extractors.pyspark_extractor import PySparkExtractor
+from lineage.extractors.scala_extractor import ScalaExtractor
+from lineage.resolution.resolver import VariableResolver
+from lineage.resolution.symbol_table import SymbolTable, Symbol
 
 
 class TestShellTimestamps:

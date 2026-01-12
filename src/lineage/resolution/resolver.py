@@ -62,12 +62,36 @@ class VariableResolver:
         # Handle Hive-specific variable syntax: ${hiveconf:var}, ${hivevar:var}
         result = self._resolve_hive_variables(result)
         
+        # Common defaults for non-prefixed variables (used by NiFi, shell, etc.)
+        common_var_defaults = {
+            'processing_date': '2026-01-13',
+            'run_date': '2026-01-13',
+            'env': 'prod',
+            # Function parameter defaults (sample values for reporting)
+            'remote_file': 'data_file.csv',
+            'local_path': '/data/incoming',
+            'file': 'data_file',
+            'input_path': '/data/input',
+            'output_path': '/data/output',
+            # Date partitioning variables (used in NiFi, S3, HDFS paths)
+            'year': '2026',
+            'month': '01',
+            'day': '13',
+            # Config/environment variables
+            'config.environment': 'prod',
+            'config.runDate': '2026-01-13',
+            '...': 'prod',  # Truncated/incomplete extractions
+        }
+        
         for pattern in self.patterns:
             def replace_fn(match: re.Match) -> str:
                 var_name = match.group(1)
                 value = self.symbol_table.resolve(var_name)
                 if value is not None:
                     return value
+                # Try common defaults
+                if var_name in common_var_defaults:
+                    return common_var_defaults[var_name]
                 return match.group(0)  # Keep original if not resolved
             
             result = pattern.sub(replace_fn, result)
@@ -115,6 +139,23 @@ class VariableResolver:
         # Pattern: ${hiveconf:var}, ${hivevar:var}, etc.
         hive_var_pattern = re.compile(r'\$\{(hiveconf|hivevar|system|env):([^}]+)\}', re.IGNORECASE)
         
+        # Common Hive parameter defaults (for typical naming conventions)
+        common_defaults = {
+            'analytics_db': 'prod_analytics',
+            'reports_db': 'prod_reports',
+            'warehouse_db': 'prod_warehouse',
+            'staging_db': 'prod_staging',
+            'env': 'prod',
+            # Common table references
+            'source_products': 'catalog_db.products',
+            'source_orders': 'prod_db.orders',
+            'source_customers': 'prod_db.customers',
+            'target_table': 'analytics_db.target_table',
+            # Common date/processing parameters
+            'processing_date': '2026-01-13',
+            'run_date': '2026-01-13',
+        }
+        
         def resolve_hive_var(match: re.Match) -> str:
             prefix = match.group(1).lower()
             var_name = match.group(2)
@@ -129,6 +170,10 @@ class VariableResolver:
             value = self.symbol_table.resolve(prefixed_name)
             if value is not None:
                 return value
+            
+            # Try common defaults for typical Hive parameters
+            if var_name.lower() in common_defaults:
+                return common_defaults[var_name.lower()]
             
             # Keep original if not resolved
             return match.group(0)

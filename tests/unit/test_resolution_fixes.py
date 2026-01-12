@@ -11,11 +11,11 @@ Tests all the fixes for resolution issues:
 
 import pytest
 from pathlib import Path
-from src.lineage.extractors.pyspark_extractor import PySparkExtractor
-from src.lineage.extractors.hive_extractor import HiveExtractor
-from src.lineage.extractors.shell_extractor import ShellExtractor
-from src.lineage.resolution.resolver import VariableResolver
-from src.lineage.resolution.symbol_table import SymbolTable, Symbol
+from lineage.extractors.pyspark_extractor import PySparkExtractor
+from lineage.extractors.hive_extractor import HiveExtractor
+from lineage.extractors.shell_extractor import ShellExtractor
+from lineage.resolution.resolver import VariableResolver
+from lineage.resolution.symbol_table import SymbolTable, Symbol
 
 
 class TestPySparkOsGetenvExtraction:

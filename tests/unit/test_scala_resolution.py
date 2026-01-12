@@ -3,9 +3,9 @@ Unit test for Scala conditional default extraction.
 """
 
 import pytest
-from src.lineage.extractors.scala_extractor import ScalaExtractor
-from src.lineage.resolution.resolver import VariableResolver
-from src.lineage.resolution.symbol_table import SymbolTable, Symbol
+from lineage.extractors.scala_extractor import ScalaExtractor
+from lineage.resolution.resolver import VariableResolver
+from lineage.resolution.symbol_table import SymbolTable, Symbol
 
 
 class TestScalaConditionalDefaults:

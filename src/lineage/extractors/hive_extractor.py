@@ -119,20 +119,6 @@ class HiveSQLParser:
     
     def _extract_full_identifier(self, tokens: List, start_idx: int) -> str:
         """Extract full identifier including variable syntax that may span multiple tokens.
-        
-        Handles cases like:
-        - simple_table
-        - db.table
-        - db_${hivevar:env}.table (spans multiple tokens)
-        - table_${hivevar:var}
-        
-        sqlparse tokenizes gold_${hivevar:env} as:
-        - gold_$ (Name)
-        - { (Error)
-        - hivevar (Name)
-        - : (Punctuation)
-        - env (Name)
-        - } (Error)
         We need to collect all these tokens.
         """
         identifier_parts = []
