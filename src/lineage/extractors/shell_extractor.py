@@ -27,7 +27,7 @@ class ShellExtractor(BaseExtractor):
             "hdfs_text": re.compile(r'hdfs\s+dfs\s+-text\s+(\S+)'),
             "distcp": re.compile(r'hadoop\s+distcp(?:\s+|[\s\\]+)*(?:-[\w-]+(?:\s+|[\s\\]+)+)*([^\s\\]+)(?:\s+|[\s\\]+)+([^\s\\]+)', re.MULTILINE),
             "spark_submit": re.compile(r'spark-submit\s+.*?(\S+\.(?:py|jar))(?:[ \t]+([^\n]*))?', re.MULTILINE),
-            "spark_submit_full": re.compile(r'spark-submit[ \t]+(.*?)(\S+\.(?:py|jar))(?:[ \t]+([^\n]*))?', re.MULTILINE),
+            "spark_submit_full": re.compile(r'spark-submit[ \t]+([^\n]+)', re.MULTILINE),
             "hive_execute": re.compile(r'hive\s+-e\s+["\']([^"\']+)["\']'),
             "hive_file": re.compile(r'hive\s+-f\s+(\S+)'),
             "beeline_execute": re.compile(r'beeline\s+.*?-e\s+["\']([^"\']+)["\']', re.DOTALL),
@@ -466,13 +466,27 @@ class ShellExtractor(BaseExtractor):
         
         # spark-submit (enhanced to capture configs and arguments)
         for match in self.patterns["spark_submit_full"].finditer(content):
-            spark_configs = match.group(1).strip()  # Everything before the script
-            script = match.group(2)  # The .py or .jar file
-            script_args = match.group(3).strip() if match.group(3) else ""  # Arguments after script
+            full_command_line = match.group(1).strip()  # Everything after "spark-submit"
+            full_command = "spark-submit " + full_command_line
             line_number = content[:match.start()].count("\n") + 1
             
+            # Find the actual main application file (excluding --jars, --py-files, etc.)
+            main_app = self._find_main_application_file(full_command)
+            if not main_app:
+                # Skip if we can't find the main app
+                continue
+            
             # Determine job type
-            job_type = "pyspark" if script.endswith(".py") else "spark-jar"
+            job_type = "pyspark" if main_app.endswith(".py") else "spark-jar"
+            
+            # Split the command into configs (before main app) and args (after main app)
+            if main_app in full_command_line:
+                app_idx = full_command_line.index(main_app)
+                spark_configs = full_command_line[:app_idx].strip()
+                script_args = full_command_line[app_idx + len(main_app):].strip()
+            else:
+                spark_configs = full_command_line
+                script_args = ""
             
             fact = JobDependencyFact(
                 source_file=source_file,
@@ -480,7 +494,7 @@ class ShellExtractor(BaseExtractor):
                 confidence=0.85,
                 extraction_method=ExtractionMethod.REGEX,
                 evidence=match.group(0),
-                dependency_job=script,
+                dependency_job=main_app,
                 dependency_type="spark-submit"
             )
             
@@ -764,6 +778,36 @@ class ShellExtractor(BaseExtractor):
                 facts.append(fact)
         
         return facts
+    
+    def _find_main_application_file(self, spark_submit_command: str) -> Optional[str]:
+        """
+        Find the main application .py or .jar file in a spark-submit command.
+        Excludes files that are part of --jars, --py-files, --files, --archives.
+        """
+        # Find all .jar and .py files in the command
+        all_files = re.findall(r'([/\w.-]+\.(?:jar|py))', spark_submit_command)
+        
+        if not all_files:
+            return None
+        
+        # Find values of --jars, --py-files, --files, --archives (comma-separated lists)
+        dependency_files = set()
+        
+        for flag in ['--jars', '--py-files', '--files', '--archives']:
+            match = re.search(rf'{flag}[ \t]+([^\s]+)', spark_submit_command)
+            if match:
+                value = match.group(1)
+                # Split by comma and add all files
+                for f in value.split(','):
+                    dependency_files.add(f.strip())
+        
+        # The main application file is one that's NOT in the dependency lists
+        for f in all_files:
+            if f not in dependency_files:
+                return f
+        
+        # If all files are in dependency lists, return the first one (shouldn't happen)
+        return all_files[0] if all_files else None
     
     def get_confidence_base(self) -> float:
         """Get base confidence for shell extraction."""
