@@ -25,7 +25,7 @@ class ShellExtractor(BaseExtractor):
             "hdfs_mv": re.compile(r'hdfs\s+dfs\s+-mv\s+(\S+)\s+(\S+)'),
             "hdfs_cat": re.compile(r'hdfs\s+dfs\s+-cat\s+(\S+)'),
             "hdfs_text": re.compile(r'hdfs\s+dfs\s+-text\s+(\S+)'),
-            "distcp": re.compile(r'hadoop\s+distcp\s+(?:(?:-\w+\s+)+)?(\S+)\s+(\S+)'),
+            "distcp": re.compile(r'hadoop\s+distcp(?:\s+|[\s\\]+)*(?:-[\w-]+(?:\s+|[\s\\]+)+)*([^\s\\]+)(?:\s+|[\s\\]+)+([^\s\\]+)', re.MULTILINE),
             "spark_submit": re.compile(r'spark-submit\s+.*?(\S+\.(?:py|jar|scala))'),
             "hive_execute": re.compile(r'hive\s+-e\s+["\']([^"\']+)["\']'),
             "hive_file": re.compile(r'hive\s+-f\s+(\S+)'),

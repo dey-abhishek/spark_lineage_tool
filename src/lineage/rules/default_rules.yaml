@@ -193,10 +193,10 @@ rules:
   - rule_id: shell_distcp
     applies_to:
       - shell
-    pattern: "hadoop\\s+distcp\\s+.*?(?P<source>\\S+)\\s+(?P<target>\\S+)"
+    pattern: "hadoop\\s+distcp(?:\\s+|[\\s\\\\]+)*(?:-[\\w-]+(?:\\s+|[\\s\\\\]+)+)*(?P<source>[^\\s\\\\]+)(?:\\s+|[\\s\\\\]+)+(?P<target>[^\\s\\\\]+)"
     action: WRITE_HDFS_PATH
     confidence: 0.75
-    description: "Detect distcp commands"
+    description: "Detect distcp commands (handles multiline with flags)"
   
   - rule_id: shell_spark_submit
     applies_to:
