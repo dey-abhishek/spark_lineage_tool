@@ -3,135 +3,155 @@
 rules:
   # PySpark Rules
   - rule_id: pyspark_read_parquet
-    applies_to: [pyspark]
-    pattern: '\.read\.parquet\(["\'](?P<path>[^"\']+)["\']\)'
+    applies_to:
+      - pyspark
+    pattern: "\\.read\\.parquet\\([\"'](?P<path>[^\"']+)[\"']\\)"
     action: READ_HDFS_PATH
     confidence: 0.75
     description: "Detect spark.read.parquet() calls"
   
   - rule_id: pyspark_read_csv
-    applies_to: [pyspark]
-    pattern: '\.read\.csv\(["\'](?P<path>[^"\']+)["\']\)'
+    applies_to:
+      - pyspark
+    pattern: "\\.read\\.csv\\([\"'](?P<path>[^\"']+)[\"']\\)"
     action: READ_HDFS_PATH
     confidence: 0.75
     description: "Detect spark.read.csv() calls"
   
   - rule_id: pyspark_read_json
-    applies_to: [pyspark]
-    pattern: '\.read\.json\(["\'](?P<path>[^"\']+)["\']\)'
+    applies_to:
+      - pyspark
+    pattern: "\\.read\\.json\\([\"'](?P<path>[^\"']+)[\"']\\)"
     action: READ_HDFS_PATH
     confidence: 0.75
     description: "Detect spark.read.json() calls"
   
   - rule_id: pyspark_read_orc
-    applies_to: [pyspark]
-    pattern: '\.read\.orc\(["\'](?P<path>[^"\']+)["\']\)'
+    applies_to:
+      - pyspark
+    pattern: "\\.read\\.orc\\([\"'](?P<path>[^\"']+)[\"']\\)"
     action: READ_HDFS_PATH
     confidence: 0.75
     description: "Detect spark.read.orc() calls"
   
   - rule_id: pyspark_read_table
-    applies_to: [pyspark]
-    pattern: '\.table\(["\'](?P<table>[^"\']+)["\']\)'
+    applies_to:
+      - pyspark
+    pattern: "\\.table\\([\"'](?P<table>[^\"']+)[\"']\\)"
     action: READ_HIVE_TABLE
     confidence: 0.80
     description: "Detect spark.table() calls"
   
   - rule_id: pyspark_write_parquet
-    applies_to: [pyspark]
-    pattern: '\.write\.parquet\(["\'](?P<path>[^"\']+)["\']\)'
+    applies_to:
+      - pyspark
+    pattern: "\\.write\\.parquet\\([\"'](?P<path>[^\"']+)[\"']\\)"
     action: WRITE_HDFS_PATH
     confidence: 0.75
     description: "Detect df.write.parquet() calls"
   
   - rule_id: pyspark_write_csv
-    applies_to: [pyspark]
-    pattern: '\.write\.csv\(["\'](?P<path>[^"\']+)["\']\)'
+    applies_to:
+      - pyspark
+    pattern: "\\.write\\.csv\\([\"'](?P<path>[^\"']+)[\"']\\)"
     action: WRITE_HDFS_PATH
     confidence: 0.75
     description: "Detect df.write.csv() calls"
   
   - rule_id: pyspark_save_as_table
-    applies_to: [pyspark, scala]
-    pattern: '\.saveAsTable\(["\'](?P<table>[^"\']+)["\']\)'
+    applies_to:
+      - pyspark
+      - scala
+    pattern: "\\.saveAsTable\\([\"'](?P<table>[^\"']+)[\"']\\)"
     action: WRITE_HIVE_TABLE
     confidence: 0.80
     description: "Detect saveAsTable() calls"
   
   - rule_id: pyspark_insert_into
-    applies_to: [pyspark, scala]
-    pattern: '\.insertInto\(["\'](?P<table>[^"\']+)["\']\)'
+    applies_to:
+      - pyspark
+      - scala
+    pattern: "\\.insertInto\\([\"'](?P<table>[^\"']+)[\"']\\)"
     action: WRITE_HIVE_TABLE
     confidence: 0.80
     description: "Detect insertInto() calls"
   
   # Scala Spark Rules (similar to PySpark)
   - rule_id: scala_read_parquet
-    applies_to: [scala]
-    pattern: '\.read\.parquet\("(?P<path>[^"]+)"\)'
+    applies_to:
+      - scala
+    pattern: "\\.read\\.parquet\\(\"(?P<path>[^\"]+)\"\\)"
     action: READ_HDFS_PATH
     confidence: 0.75
     description: "Detect Scala spark.read.parquet() calls"
   
   - rule_id: scala_read_table
-    applies_to: [scala]
-    pattern: '\.table\("(?P<table>[^"]+)"\)'
+    applies_to:
+      - scala
+    pattern: "\\.table\\(\"(?P<table>[^\"]+)\"\\)"
     action: READ_HIVE_TABLE
     confidence: 0.80
     description: "Detect Scala spark.table() calls"
   
   # Hive SQL Rules
   - rule_id: hive_insert_overwrite
-    applies_to: [hive]
-    pattern: 'INSERT\s+OVERWRITE\s+TABLE\s+(?P<table>[\w.]+)'
+    applies_to:
+      - hive
+    pattern: "INSERT\\s+OVERWRITE\\s+TABLE\\s+(?P<table>[\\w.]+)"
     action: WRITE_HIVE_TABLE
     confidence: 0.90
     description: "Detect INSERT OVERWRITE TABLE statements"
     case_sensitive: false
   
   - rule_id: hive_insert_into
-    applies_to: [hive]
-    pattern: 'INSERT\s+INTO\s+(?:TABLE\s+)?(?P<table>[\w.]+)'
+    applies_to:
+      - hive
+    pattern: "INSERT\\s+INTO\\s+(?:TABLE\\s+)?(?P<table>[\\w.]+)"
     action: WRITE_HIVE_TABLE
     confidence: 0.90
     description: "Detect INSERT INTO TABLE statements"
     case_sensitive: false
   
   - rule_id: hive_create_table_as
-    applies_to: [hive]
-    pattern: 'CREATE\s+(?:EXTERNAL\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?P<table>[\w.]+)\s+AS'
+    applies_to:
+      - hive
+    pattern: "CREATE\\s+(?:EXTERNAL\\s+)?TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(?P<table>[\\w.]+)\\s+AS"
     action: WRITE_HIVE_TABLE
     confidence: 0.90
     description: "Detect CREATE TABLE AS SELECT statements"
     case_sensitive: false
   
   - rule_id: hive_from_table
-    applies_to: [hive]
-    pattern: 'FROM\s+(?P<table>[\w.]+)'
+    applies_to:
+      - hive
+    pattern: "FROM\\s+(?P<table>[\\w.]+)"
     action: READ_HIVE_TABLE
     confidence: 0.85
     description: "Detect FROM clauses"
     case_sensitive: false
   
   - rule_id: hive_join_table
-    applies_to: [hive]
-    pattern: 'JOIN\s+(?P<table>[\w.]+)'
+    applies_to:
+      - hive
+    pattern: "JOIN\\s+(?P<table>[\\w.]+)"
     action: READ_HIVE_TABLE
     confidence: 0.85
     description: "Detect JOIN clauses"
     case_sensitive: false
   
   - rule_id: hive_load_data
-    applies_to: [hive]
-    pattern: 'LOAD\s+DATA\s+(?:LOCAL\s+)?INPATH\s+["\'](?P<path>[^"\']+)["\']\s+INTO\s+TABLE\s+(?P<table>[\w.]+)'
+    applies_to:
+      - hive
+    pattern: "LOAD\\s+DATA\\s+(?:LOCAL\\s+)?INPATH\\s+[\"'](?P<path>[^\"']+)[\"']\\s+INTO\\s+TABLE\\s+(?P<table>[\\w.]+)"
     action: WRITE_HIVE_TABLE
     confidence: 0.90
     description: "Detect LOAD DATA INPATH statements"
     case_sensitive: false
   
   - rule_id: hive_alter_location
-    applies_to: [hive]
-    pattern: 'ALTER\s+TABLE\s+(?P<table>[\w.]+)\s+SET\s+LOCATION\s+["\'](?P<path>[^"\']+)["\']'
+    applies_to:
+      - hive
+    pattern: "ALTER\\s+TABLE\\s+(?P<table>[\\w.]+)\\s+SET\\s+LOCATION\\s+[\"'](?P<path>[^\"']+)[\"']"
     action: WRITE_HIVE_TABLE
     confidence: 0.85
     description: "Detect ALTER TABLE SET LOCATION"
@@ -139,73 +159,85 @@ rules:
   
   # Shell Script Rules
   - rule_id: shell_hdfs_get
-    applies_to: [shell]
-    pattern: 'hdfs\s+dfs\s+-get\s+(?P<source>\S+)\s+(?P<target>\S+)'
+    applies_to:
+      - shell
+    pattern: "hdfs\\s+dfs\\s+-get\\s+(?P<source>\\S+)\\s+(?P<target>\\S+)"
     action: READ_HDFS_PATH
     confidence: 0.70
     description: "Detect hdfs dfs -get commands"
   
   - rule_id: shell_hdfs_put
-    applies_to: [shell]
-    pattern: 'hdfs\s+dfs\s+-put\s+(?P<source>\S+)\s+(?P<target>\S+)'
+    applies_to:
+      - shell
+    pattern: "hdfs\\s+dfs\\s+-put\\s+(?P<source>\\S+)\\s+(?P<target>\\S+)"
     action: WRITE_HDFS_PATH
     confidence: 0.70
     description: "Detect hdfs dfs -put commands"
   
   - rule_id: shell_hdfs_cp
-    applies_to: [shell]
-    pattern: 'hdfs\s+dfs\s+-cp\s+(?P<source>\S+)\s+(?P<target>\S+)'
+    applies_to:
+      - shell
+    pattern: "hdfs\\s+dfs\\s+-cp\\s+(?P<source>\\S+)\\s+(?P<target>\\S+)"
     action: WRITE_HDFS_PATH
     confidence: 0.70
     description: "Detect hdfs dfs -cp commands"
   
   - rule_id: shell_hdfs_mv
-    applies_to: [shell]
-    pattern: 'hdfs\s+dfs\s+-mv\s+(?P<source>\S+)\s+(?P<target>\S+)'
+    applies_to:
+      - shell
+    pattern: "hdfs\\s+dfs\\s+-mv\\s+(?P<source>\\S+)\\s+(?P<target>\\S+)"
     action: WRITE_HDFS_PATH
     confidence: 0.70
     description: "Detect hdfs dfs -mv commands"
   
   - rule_id: shell_distcp
-    applies_to: [shell]
-    pattern: 'hadoop\s+distcp\s+(?P<source>\S+)\s+(?P<target>\S+)'
+    applies_to:
+      - shell
+    pattern: "hadoop\\s+distcp\\s+.*?(?P<source>\\S+)\\s+(?P<target>\\S+)"
     action: WRITE_HDFS_PATH
     confidence: 0.75
     description: "Detect distcp commands"
   
   - rule_id: shell_spark_submit
-    applies_to: [shell]
-    pattern: 'spark-submit\s+.*?(?P<script>\S+\.(?:py|jar|scala))'
+    applies_to:
+      - shell
+    pattern: "spark-submit\\s+.*?(?P<script>\\S+\\.(?:py|jar|scala))"
     action: JOB_INVOCATION
     confidence: 0.80
     description: "Detect spark-submit commands"
   
   - rule_id: shell_hive_execute
-    applies_to: [shell]
-    pattern: 'hive\s+-e\s+["\'](?P<sql>[^"\']+)["\']'
+    applies_to:
+      - shell
+    pattern: "hive\\s+-e\\s+[\"'](?P<sql>[^\"']+)[\"']"
     action: JOB_INVOCATION
     confidence: 0.75
     description: "Detect hive -e commands"
   
   - rule_id: shell_hive_file
-    applies_to: [shell]
-    pattern: 'hive\s+-f\s+(?P<file>\S+\.(?:hql|sql))'
+    applies_to:
+      - shell
+    pattern: "hive\\s+-f\\s+(?P<file>\\S+\\.(?:hql|sql))"
     action: JOB_INVOCATION
     confidence: 0.80
     description: "Detect hive -f commands"
   
   # Config Reference Rules
   - rule_id: config_property_ref
-    applies_to: [pyspark, scala, shell]
-    pattern: '\$\{(?P<key>[^}]+)\}'
+    applies_to:
+      - pyspark
+      - scala
+      - shell
+    pattern: "\\$\\{(?P<key>[^}]+)\\}"
     action: CONFIG_REFERENCE
     confidence: 0.60
     description: "Detect ${property} references"
   
   - rule_id: config_env_var
-    applies_to: [shell, pyspark]
-    pattern: '\$(?P<key>[A-Z_][A-Z0-9_]+)'
+    applies_to:
+      - shell
+      - pyspark
+    pattern: "\\$(?P<key>[A-Z_][A-Z0-9_]+)"
     action: CONFIG_REFERENCE
     confidence: 0.55
     description: "Detect $ENV_VAR references"
-

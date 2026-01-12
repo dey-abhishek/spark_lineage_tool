@@ -179,8 +179,19 @@ class NiFiExtractor(BaseExtractor):
         elif "File" in proc_type:
             dataset_urn = properties.get("Directory", properties.get("Output Directory"))
             dataset_type = "local"
-        elif "Hive" in proc_type:
+        elif "Hive" in proc_type or "HiveQL" in proc_type:
+            # Try to get table name directly
             table = properties.get("hive-table", properties.get("Table Name"))
+            if not table:
+                # Try to extract from SQL Statement
+                sql_statement = properties.get("SQL Statement", "")
+                if sql_statement:
+                    # Extract table from INSERT INTO or similar
+                    import re
+                    match = re.search(r'INSERT\s+INTO\s+([\w.#{}]+)', sql_statement, re.IGNORECASE)
+                    if match:
+                        table = match.group(1)
+            
             if table:
                 dataset_urn = f"hive://{table}"
                 dataset_type = "hive"

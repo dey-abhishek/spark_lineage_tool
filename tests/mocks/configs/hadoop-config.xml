@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Hadoop/Spark XML configuration -->
+<!-- Tests: XML property parsing, Hadoop-style configuration -->
+
+<configuration>
+    <property>
+        <name>fs.defaultFS</name>
+        <value>hdfs://namenode:8020</value>
+        <description>HDFS namenode URI</description>
+    </property>
+    
+    <property>
+        <name>dfs.replication</name>
+        <value>3</value>
+    </property>
+    
+    <property>
+        <name>mapreduce.input.fileinputformat.inputdir</name>
+        <value>/data/raw/input</value>
+    </property>
+    
+    <property>
+        <name>mapreduce.output.fileoutputformat.outputdir</name>
+        <value>/data/processed/output</value>
+    </property>
+    
+    <property>
+        <name>hive.metastore.uris</name>
+        <value>thrift://hive-metastore:9083</value>
+    </property>
+    
+    <property>
+        <name>spark.sql.warehouse.dir</name>
+        <value>/user/hive/warehouse</value>
+    </property>
+    
+    <property>
+        <name>spark.eventLog.dir</name>
+        <value>hdfs://namenode:8020/var/log/spark</value>
+    </property>
+    
+    <property>
+        <name>spark.history.fs.logDirectory</name>
+        <value>hdfs://namenode:8020/var/log/spark</value>
+    </property>
+</configuration>
+

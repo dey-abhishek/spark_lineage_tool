@@ -29,8 +29,8 @@ class ShellExtractor(BaseExtractor):
             "spark_submit": re.compile(r'spark-submit\s+.*?(\S+\.(?:py|jar|scala))'),
             "hive_execute": re.compile(r'hive\s+-e\s+["\']([^"\']+)["\']'),
             "hive_file": re.compile(r'hive\s+-f\s+(\S+)'),
-            "beeline_execute": re.compile(r'beeline\s+-e\s+["\']([^"\']+)["\']'),
-            "beeline_file": re.compile(r'beeline\s+-f\s+(\S+)'),
+            "beeline_execute": re.compile(r'beeline\s+.*?-e\s+["\']([^"\']+)["\']', re.DOTALL),
+            "beeline_file": re.compile(r'beeline\s+.*?-f\s+(\S+)'),
         }
     
     def extract(self, file_path: Path) -> List[Fact]:
@@ -52,21 +52,46 @@ class ShellExtractor(BaseExtractor):
         # Remove comments
         content_no_comments = self._remove_comments(content)
         
+        # Join lines with backslash continuation
+        content_joined = self._join_continued_lines(content_no_comments)
+        
         # Extract HDFS operations
-        facts.extend(self._extract_hdfs_ops(content_no_comments, source_file))
+        facts.extend(self._extract_hdfs_ops(content_joined, source_file))
         
         # Extract job invocations
-        facts.extend(self._extract_job_invocations(content_no_comments, source_file))
+        facts.extend(self._extract_job_invocations(content_joined, source_file))
         
         # Use rule engine for additional patterns
         if self.rule_engine:
-            matches = self.rule_engine.apply_rules(content_no_comments, "shell")
+            matches = self.rule_engine.apply_rules(content_joined, "shell")
             for match in matches:
                 fact = self._match_to_fact(match, source_file)
                 if fact:
                     facts.append(fact)
         
         return facts
+    
+    def _join_continued_lines(self, content: str) -> str:
+        """Join lines that end with backslash continuation."""
+        lines = content.split("\n")
+        joined_lines = []
+        current_line = ""
+        
+        for line in lines:
+            if line.rstrip().endswith("\\"):
+                # Remove trailing backslash and whitespace, add to current line
+                current_line += line.rstrip()[:-1].rstrip() + " "
+            else:
+                # Add this line and commit the accumulated line
+                current_line += line
+                joined_lines.append(current_line)
+                current_line = ""
+        
+        # Add any remaining line
+        if current_line:
+            joined_lines.append(current_line)
+        
+        return "\n".join(joined_lines)
     
     def _remove_comments(self, content: str) -> str:
         """Remove shell comments."""
@@ -219,7 +244,7 @@ class ShellExtractor(BaseExtractor):
         return facts
     
     def _extract_job_invocations(self, content: str, source_file: str) -> List[Fact]:
-        """Extract job invocations (spark-submit, hive, etc.)."""
+        """Extract job invocations (spark-submit, hive, beeline, etc.)."""
         facts = []
         
         # spark-submit
@@ -235,6 +260,38 @@ class ShellExtractor(BaseExtractor):
                 evidence=match.group(0),
                 dependency_job=script,
                 dependency_type="spark-submit"
+            )
+            facts.append(fact)
+        
+        # beeline -e
+        for match in self.patterns["beeline_execute"].finditer(content):
+            sql = match.group(1)
+            line_number = content[:match.start()].count("\n") + 1
+            
+            fact = JobDependencyFact(
+                source_file=source_file,
+                line_number=line_number,
+                confidence=0.75,
+                extraction_method=ExtractionMethod.REGEX,
+                evidence=match.group(0),
+                dependency_type="beeline"
+            )
+            fact.params["sql"] = sql
+            facts.append(fact)
+        
+        # beeline -f
+        for match in self.patterns["beeline_file"].finditer(content):
+            sql_file = match.group(1)
+            line_number = content[:match.start()].count("\n") + 1
+            
+            fact = JobDependencyFact(
+                source_file=source_file,
+                line_number=line_number,
+                confidence=0.80,
+                extraction_method=ExtractionMethod.REGEX,
+                evidence=match.group(0),
+                dependency_job=sql_file,
+                dependency_type="beeline"
             )
             facts.append(fact)
         

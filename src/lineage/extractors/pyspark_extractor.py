@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 from typing import List, Optional, Any, Set
 import re
+import sqlparse
 
 from .base import BaseExtractor
 from lineage.ir import Fact, ReadFact, WriteFact, FactType, ExtractionMethod
@@ -23,8 +24,14 @@ class PySparkASTVisitor(ast.NodeVisitor):
         # Extract method chain
         call_chain = self._extract_call_chain(node)
         
+        # Detect Delta operations (DeltaTable.forPath, .merge)
+        if self._is_delta_operation(call_chain):
+            fact = self._extract_delta_fact(node, call_chain)
+            if fact:
+                self.facts.append(fact)
+        
         # Detect read operations
-        if self._is_read_operation(call_chain):
+        elif self._is_read_operation(call_chain):
             fact = self._extract_read_fact(node, call_chain)
             if fact:
                 self.facts.append(fact)
@@ -85,12 +92,15 @@ class PySparkASTVisitor(ast.NodeVisitor):
     def _is_read_operation(self, chain: List[str]) -> bool:
         """Check if call chain is a read operation."""
         read_methods = ["parquet", "csv", "json", "orc", "text", "avro", "load"]
-        return "read" in chain and any(method in chain for method in read_methods)
+        # Handle both batch and streaming reads
+        return ("read" in chain or "readStream" in chain) and any(method in chain for method in read_methods)
     
     def _is_write_operation(self, chain: List[str]) -> bool:
         """Check if call chain is a write operation."""
-        write_methods = ["parquet", "csv", "json", "orc", "text", "avro", "save"]
-        return "write" in chain and any(method in chain for method in write_methods)
+        write_methods = ["parquet", "csv", "json", "orc", "text", "avro", "save", "start"]
+        # Handle both batch and streaming writes
+        # For streaming: writeStream.format().start() or writeStream.format().option().start()
+        return ("write" in chain or "writeStream" in chain) and any(method in chain for method in write_methods)
     
     def _is_table_operation(self, chain: List[str]) -> bool:
         """Check if call chain is a table operation."""
@@ -101,14 +111,17 @@ class PySparkASTVisitor(ast.NodeVisitor):
         """Check if call chain is a SQL operation."""
         return "sql" in chain
     
+    def _is_delta_operation(self, chain: List[str]) -> bool:
+        """Check if call chain is a Delta Lake operation."""
+        delta_methods = ["forPath", "forName", "merge"]
+        return "DeltaTable" in chain or any(method in chain for method in delta_methods)
+    
     def _extract_string_arg(self, node: ast.Call, pos: int = 0) -> Optional[str]:
         """Extract string argument from call."""
         if len(node.args) > pos:
             arg = node.args[pos]
             if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                 return arg.value
-            elif isinstance(arg, ast.Str):  # Python 3.7 compatibility
-                return arg.s
             elif isinstance(arg, ast.Name):
                 # Try to resolve variable
                 return f"${{{arg.id}}}"
@@ -122,8 +135,6 @@ class PySparkASTVisitor(ast.NodeVisitor):
         for value in node.values:
             if isinstance(value, ast.Constant):
                 parts.append(str(value.value))
-            elif isinstance(value, ast.Str):
-                parts.append(value.s)
             elif isinstance(value, ast.FormattedValue):
                 if isinstance(value.value, ast.Name):
                     parts.append(f"${{{value.value.id}}}")
@@ -131,25 +142,85 @@ class PySparkASTVisitor(ast.NodeVisitor):
                     parts.append("${...}")
         return "".join(parts)
     
+    def _extract_format_from_options(self, node: ast.Call) -> Optional[str]:
+        """Extract format from .format() or .option() calls in chain."""
+        # Traverse the entire call chain looking for .format()
+        current = node
+        
+        while current:
+            if isinstance(current, ast.Call):
+                # Check if this is a .format() call
+                if isinstance(current.func, ast.Attribute) and current.func.attr == "format":
+                    if len(current.args) > 0 and isinstance(current.args[0], ast.Constant):
+                        return current.args[0].value
+                
+                # Move up the chain - check the value of the attribute
+                if isinstance(current.func, ast.Attribute):
+                    current = current.func.value
+                else:
+                    break
+            else:
+                break
+        
+        return None
+    
+    def _extract_option_value(self, node: ast.Call, option_name: str) -> Optional[str]:
+        """Extract value from .option(name, value) calls in chain."""
+        current = node
+        
+        while current:
+            if isinstance(current, ast.Call):
+                # Check if this is an .option() call
+                if isinstance(current.func, ast.Attribute) and current.func.attr == "option":
+                    if len(current.args) >= 2:
+                        # Check if first arg matches option_name
+                        if isinstance(current.args[0], ast.Constant) and current.args[0].value == option_name:
+                            if isinstance(current.args[1], ast.Constant) and isinstance(current.args[1].value, str):
+                                return current.args[1].value
+                
+                # Move up the chain
+                if isinstance(current.func, ast.Attribute):
+                    current = current.func.value
+                else:
+                    break
+            else:
+                break
+        
+        return None
+    
     def _extract_read_fact(self, node: ast.Call, chain: List[str]) -> Optional[Fact]:
         """Extract read fact from AST node."""
+        # Check for format-based reads (e.g., .format("kafka").load())
+        format_type = self._extract_format_from_options(node)
+        
         path = self._extract_string_arg(node)
-        if not path:
+        
+        # For streaming sources like Kafka, format is the key info
+        if format_type and not path:
+            path = f"stream:{format_type}"
+            evidence_path = format_type
+        elif format_type:
+            evidence_path = f"{format_type}:{path}"
+        elif path:
+            evidence_path = path
+        else:
             return None
         
         fact = ReadFact(
             source_file=self.source_file,
             line_number=node.lineno,
-            dataset_urn=path,
-            dataset_type="hdfs",
+            dataset_urn=path if path else f"stream:{format_type}",
+            dataset_type="stream" if "readStream" in chain else "hdfs",
             confidence=0.85,
             extraction_method=ExtractionMethod.AST,
-            evidence=f"spark.read.{chain[-1]}({path})",
-            has_placeholders="${" in path
+            evidence=f"spark.{'readStream' if 'readStream' in chain else 'read'}.{f'format({format_type}).' if format_type else ''}{chain[-1]}({evidence_path})",
+            has_placeholders="${" in path if path else False
         )
         
-        # Determine format from chain
-        if "parquet" in chain:
+        # Determine format from chain or explicit format call
+        if format_type:
+            fact.params["format"] = format_type
+        elif "parquet" in chain:
             fact.params["format"] = "parquet"
         elif "csv" in chain:
             fact.params["format"] = "csv"
@@ -158,11 +229,24 @@ class PySparkASTVisitor(ast.NodeVisitor):
         elif "orc" in chain:
             fact.params["format"] = "orc"
         
+        # Mark streaming
+        if "readStream" in chain:
+            fact.params["streaming"] = True
+        
         return fact
     
     def _extract_write_fact(self, node: ast.Call, chain: List[str]) -> Optional[Fact]:
         """Extract write fact from AST node."""
+        # Check for format-based writes
+        format_type = self._extract_format_from_options(node)
+        
+        # Try to extract path from arguments or options
         path = self._extract_string_arg(node)
+        
+        # For writeStream, check for path in .option("path", "...")
+        if not path and "writeStream" in chain:
+            path = self._extract_option_value(node, "path")
+        
         if not path:
             return None
         
@@ -170,15 +254,17 @@ class PySparkASTVisitor(ast.NodeVisitor):
             source_file=self.source_file,
             line_number=node.lineno,
             dataset_urn=path,
-            dataset_type="hdfs",
+            dataset_type="stream" if "writeStream" in chain else "hdfs",
             confidence=0.85,
             extraction_method=ExtractionMethod.AST,
-            evidence=f"df.write.{chain[-1]}({path})",
+            evidence=f"df.{'writeStream' if 'writeStream' in chain else 'write'}.{chain[-1]}({path})",
             has_placeholders="${" in path
         )
         
         # Determine format
-        if "parquet" in chain:
+        if format_type:
+            fact.params["format"] = format_type
+        elif "parquet" in chain:
             fact.params["format"] = "parquet"
         elif "csv" in chain:
             fact.params["format"] = "csv"
@@ -186,6 +272,26 @@ class PySparkASTVisitor(ast.NodeVisitor):
             fact.params["format"] = "json"
         elif "orc" in chain:
             fact.params["format"] = "orc"
+        
+        # Mark streaming
+        if "writeStream" in chain:
+            fact.params["streaming"] = True
+            # Extract checkpoint location
+            checkpoint = self._extract_option_value(node, "checkpointLocation")
+            if checkpoint:
+                # Create a separate fact for checkpoint
+                checkpoint_fact = WriteFact(
+                    source_file=self.source_file,
+                    line_number=node.lineno,
+                    dataset_urn=checkpoint,
+                    dataset_type="hdfs",
+                    confidence=0.85,
+                    extraction_method=ExtractionMethod.AST,
+                    evidence=f"checkpointLocation: {checkpoint}",
+                    has_placeholders="${" in checkpoint
+                )
+                checkpoint_fact.params["is_checkpoint"] = True
+                self.facts.append(checkpoint_fact)
         
         # Check for mode
         for keyword in node.keywords:
@@ -238,22 +344,148 @@ class PySparkASTVisitor(ast.NodeVisitor):
             return None
         
         # Parse SQL to extract table references
-        # For now, create a fact with the SQL string
-        # The SQL extractor will handle detailed parsing
-        fact = Fact(
-            fact_type=FactType.READ,  # Will be refined by SQL parsing
-            source_file=self.source_file,
-            line_number=node.lineno,
-            confidence=0.75,
-            extraction_method=ExtractionMethod.AST,
-            evidence=f"spark.sql('{sql[:100]}...')",
-            has_placeholders=True
-        )
+        tables_read, tables_written = self._parse_sql_tables(sql)
         
-        fact.params["sql"] = sql
-        fact.params["embedded"] = True
+        # Create facts for each table read
+        for table in tables_read:
+            read_fact = ReadFact(
+                source_file=self.source_file,
+                line_number=node.lineno,
+                dataset_urn=f"hive://{table}",
+                dataset_type="hive",
+                confidence=0.80,
+                extraction_method=ExtractionMethod.SQL_PARSE,
+                evidence=f"spark.sql: FROM {table}",
+                has_placeholders="${" in table
+            )
+            read_fact.params["sql"] = sql[:200]  # Truncate for storage
+            read_fact.params["embedded"] = True
+            read_fact.params["table_name"] = table
+            self.facts.append(read_fact)
         
-        return fact
+        # Create facts for each table written
+        for table in tables_written:
+            write_fact = WriteFact(
+                source_file=self.source_file,
+                line_number=node.lineno,
+                dataset_urn=f"hive://{table}",
+                dataset_type="hive",
+                confidence=0.80,
+                extraction_method=ExtractionMethod.SQL_PARSE,
+                evidence=f"spark.sql: INSERT INTO {table}",
+                has_placeholders="${" in table
+            )
+            write_fact.params["sql"] = sql[:200]  # Truncate for storage
+            write_fact.params["embedded"] = True
+            write_fact.params["table_name"] = table
+            self.facts.append(write_fact)
+        
+        # Return None since we've already added facts directly
+        return None
+    
+    def _parse_sql_tables(self, sql: str) -> tuple[List[str], List[str]]:
+        """Parse SQL to extract table names."""
+        tables_read = []
+        tables_written = []
+        
+        try:
+            # Normalize SQL
+            sql_upper = sql.upper()
+            
+            # Extract INSERT/CREATE targets
+            insert_pattern = r'INSERT\s+(?:OVERWRITE\s+)?(?:INTO\s+)?TABLE\s+([a-zA-Z_][\w.]*)'
+            for match in re.finditer(insert_pattern, sql_upper):
+                table = sql[match.start(1):match.end(1)].lower()
+                tables_written.append(table)
+            
+            # Extract FROM clauses
+            from_pattern = r'FROM\s+([a-zA-Z_][\w.]*)'
+            for match in re.finditer(from_pattern, sql_upper):
+                table = sql[match.start(1):match.end(1)].lower()
+                if table not in tables_read:
+                    tables_read.append(table)
+            
+            # Extract JOIN clauses
+            join_pattern = r'JOIN\s+([a-zA-Z_][\w.]*)'
+            for match in re.finditer(join_pattern, sql_upper):
+                table = sql[match.start(1):match.end(1)].lower()
+                if table not in tables_read:
+                    tables_read.append(table)
+            
+        except Exception as e:
+            # If parsing fails, return empty lists
+            pass
+        
+        return tables_read, tables_written
+    
+    def _extract_delta_fact(self, node: ast.Call, chain: List[str]) -> Optional[Fact]:
+        """Extract Delta Lake operation fact."""
+        # DeltaTable.forPath(spark, path) or DeltaTable.forName(spark, table)
+        if "forPath" in chain:
+            # Extract path from second argument
+            if len(node.args) >= 2:
+                path_arg = node.args[1]
+                if isinstance(path_arg, ast.Constant) and isinstance(path_arg.value, str):
+                    path = path_arg.value
+                elif isinstance(path_arg, ast.Name):
+                    path = f"${{{path_arg.id}}}"
+                else:
+                    return None
+                
+                # forPath reads the Delta table
+                fact = ReadFact(
+                    source_file=self.source_file,
+                    line_number=node.lineno,
+                    dataset_urn=path,
+                    dataset_type="delta",
+                    confidence=0.90,
+                    extraction_method=ExtractionMethod.AST,
+                    evidence=f"DeltaTable.forPath('{path}')",
+                    has_placeholders="${" in path
+                )
+                fact.params["format"] = "delta"
+                fact.params["delta_operation"] = "forPath"
+                return fact
+        
+        elif "forName" in chain:
+            # Extract table name from second argument
+            if len(node.args) >= 2:
+                table_arg = node.args[1]
+                if isinstance(table_arg, ast.Constant) and isinstance(table_arg.value, str):
+                    table = table_arg.value
+                    fact = ReadFact(
+                        source_file=self.source_file,
+                        line_number=node.lineno,
+                        dataset_urn=f"hive://{table}",
+                        dataset_type="delta",
+                        confidence=0.90,
+                        extraction_method=ExtractionMethod.AST,
+                        evidence=f"DeltaTable.forName('{table}')",
+                        has_placeholders=False
+                    )
+                    fact.params["format"] = "delta"
+                    fact.params["delta_operation"] = "forName"
+                    fact.params["table_name"] = table
+                    return fact
+        
+        elif "merge" in chain:
+            # .merge() operation - this is a write operation on the target table
+            # The evidence should mention "delta"
+            fact = WriteFact(
+                source_file=self.source_file,
+                line_number=node.lineno,
+                dataset_urn="delta_merge_target",  # Will be resolved from context
+                dataset_type="delta",
+                confidence=0.75,
+                extraction_method=ExtractionMethod.AST,
+                evidence="DeltaTable.merge() operation",
+                has_placeholders=False
+            )
+            fact.params["format"] = "delta"
+            fact.params["delta_operation"] = "merge"
+            return fact
+        
+        return None
 
 
 class PySparkExtractor(BaseExtractor):

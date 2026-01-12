@@ -131,7 +131,7 @@ class HiveSQLParser:
             self.write_tables.add(table_name)
         
         # CREATE TABLE AS SELECT
-        if "AS\s+SELECT" in sql or "AS SELECT" in sql:
+        if "AS SELECT" in sql or re.search(r"AS\s+SELECT", sql):
             self._parse_select(statement)
         
         # LOCATION clause
@@ -335,7 +335,7 @@ class HiveExtractor(BaseExtractor):
         
         elif action == RuleAction.WRITE_HIVE_TABLE:
             table = match["groups"].get("table", "")
-            return WriteFact(
+            fact = WriteFact(
                 source_file=source_file,
                 dataset_urn=f"hive://{table}",
                 dataset_type="hive",
@@ -344,6 +344,8 @@ class HiveExtractor(BaseExtractor):
                 evidence=match["match_text"],
                 has_placeholders="${" in table
             )
+            fact.params["table_name"] = table
+            return fact
         
         return None
     

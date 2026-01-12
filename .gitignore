@@ -74,5 +74,8 @@ secrets.yaml
 # Documentation (exclude all except README.md)
 INSTALLATION_COMPLETE.md
 SETUP.md
+TDD_PROGRESS_REPORT.md
+TDD_TEST_RESULTS.md
+TDD_FINAL_RESULTS.md
 *.draft.md
 

@@ -1,0 +1,100 @@
+# Complex application configuration with nested properties
+# Tests: Nested configs, environment variables, multiple references
+
+application:
+  name: spark-lineage-etl
+  version: 1.0.0
+  environment: ${ENVIRONMENT:prod}
+
+spark:
+  app_name: ${application.name}-${application.environment}
+  master: yarn
+  deploy_mode: cluster
+  executor:
+    instances: ${SPARK_EXECUTORS:10}
+    memory: ${SPARK_EXECUTOR_MEMORY:4g}
+    cores: ${SPARK_EXECUTOR_CORES:2}
+  driver:
+    memory: ${SPARK_DRIVER_MEMORY:2g}
+    cores: 2
+  conf:
+    spark.sql.shuffle.partitions: 200
+    spark.sql.adaptive.enabled: true
+    spark.dynamicAllocation.enabled: true
+
+data:
+  sources:
+    transactions:
+      format: parquet
+      path: /data/${application.environment}/raw/transactions/${RUN_DATE}
+      schema: prod_raw
+      table: transactions
+    
+    users:
+      format: delta
+      path: /data/${application.environment}/raw/users
+      schema: prod_raw
+      table: users
+    
+    products:
+      format: json
+      path: /data/${application.environment}/raw/products/*.json
+      schema: prod_raw
+      table: products
+  
+  targets:
+    enriched:
+      format: parquet
+      path: /data/${application.environment}/processed/enriched/${RUN_DATE}
+      partitions:
+        - date
+        - region
+      mode: overwrite
+    
+    summary:
+      format: delta
+      path: /data/${application.environment}/processed/summary
+      schema: analytics
+      table: daily_summary
+      mode: merge
+    
+    exports:
+      format: csv
+      path: /data/${application.environment}/exports/${RUN_DATE}
+      options:
+        header: true
+        delimiter: ","
+
+hive:
+  metastore:
+    uri: ${HIVE_METASTORE_URI:thrift://hive-metastore:9083}
+  databases:
+    raw: ${application.environment}_raw
+    processed: ${application.environment}_processed
+    analytics: ${application.environment}_analytics
+
+hdfs:
+  namenode: ${HDFS_NAMENODE:hdfs://namenode:8020}
+  replication: ${HDFS_REPLICATION:3}
+  base_paths:
+    raw: /data/${application.environment}/raw
+    processed: /data/${application.environment}/processed
+    staging: /data/${application.environment}/staging
+    archive: /archive/${application.environment}
+
+processing:
+  date_format: yyyy-MM-dd
+  timestamp_format: yyyy-MM-dd HH:mm:ss
+  batch_size: 10000
+  checkpoint_location: /data/${application.environment}/checkpoints
+  
+logging:
+  level: ${LOG_LEVEL:INFO}
+  path: /var/log/spark/${application.name}
+
+quality:
+  bad_records_path: /data/${application.environment}/errors/bad_records
+  data_quality_checks:
+    enabled: true
+    threshold: 0.95
+
