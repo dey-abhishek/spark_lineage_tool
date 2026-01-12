@@ -358,13 +358,13 @@ class ExcelExporter:
         ws = wb.create_sheet("Analytics (Pivot-Ready)")
         
         # Header with explanation
-        ws['A1'] = "Lineage Relationships - Each row shows: Source Job → Reads/Writes → Target Dataset"
+        ws['A1'] = "Lineage Relationships - Each row shows: Job→Dataset OR Dataset→Dataset transformations"
         ws['A1'].font = Font(size=12, bold=True, color="0563C1")
         ws.merge_cells('A1:I1')
         
         # Column headers - simplified and focused
         headers = [
-            "Source File", "Source Type",
+            "Source (Job/Dataset)", "Source Type",
             "Relationship", 
             "Target Dataset", "Dataset URN/Path", "Dataset Type",
             "Schema.Table",
@@ -376,10 +376,10 @@ class ExcelExporter:
         
         # Add helpful column descriptions in row 2
         descriptions = [
-            "Script/job file",
-            "PySpark/Hive/etc",
-            "READ or WRITE",
-            "Table/file name",
+            "Job file or Dataset name",
+            "PySpark/Scala/Hive/HDFS",
+            "READ/WRITE/TRANSFORM",
+            "Target table/file name",
             "For files only (HDFS/SFTP/S3)",
             "hive/hdfs/jdbc/sftp",
             "For tables (database.table)",
@@ -394,44 +394,60 @@ class ExcelExporter:
         # Flatten all relationships
         row = 4
         for edge in self.graph.edges:
-            # Get source (job) and target (dataset)
+            # Get source and target nodes
             source_node = self.graph.get_node_by_id(edge.source_node_id)
             target_node = self.graph.get_node_by_id(edge.target_node_id)
             
             if not source_node or not target_node:
                 continue
             
-            # For dataset-to-dataset edges, skip (we focus on job-to-dataset)
+            # Handle dataset-to-dataset edges (PRODUCES/TRANSFORM relationships)
             if source_node.node_type == NodeType.DATASET and target_node.node_type == NodeType.DATASET:
-                continue
-            
-            # Determine job and dataset
-            if source_node.node_type == NodeType.JOB:
+                # This is a transformation: Source Dataset → Target Dataset
+                source_dataset_node = source_node
+                target_dataset_node = target_node
+                
+                # Use source dataset as "job" for pivot display
+                job_node = None
+                dataset_node = target_dataset_node
+                source_dataset = source_dataset_node
+                relationship = "TRANSFORM"
+            # Handle job-to-dataset edges
+            elif source_node.node_type == NodeType.JOB:
                 job_node = source_node
                 dataset_node = target_node
+                source_dataset = None
                 relationship = "WRITE"
             elif target_node.node_type == NodeType.JOB:
                 job_node = target_node
                 dataset_node = source_node
+                source_dataset = None
                 relationship = "READ"
             else:
                 continue
             
             # Extract details
-            source_file = job_node.metadata.get('source_file', 'Unknown')
-            short_file = source_file.split('/')[-1] if '/' in source_file else source_file
-            
-            # Determine source type
-            if source_file.endswith('.py'):
-                source_type = 'PySpark'
-            elif source_file.endswith('.scala'):
-                source_type = 'Scala'
-            elif source_file.endswith('.hql') or source_file.endswith('.sql'):
-                source_type = 'Hive SQL'
-            elif source_file.endswith('.sh'):
-                source_type = 'Shell'
+            if job_node:
+                # For job-to-dataset relationships
+                source_file = job_node.metadata.get('source_file', 'Unknown')
+                short_file = source_file.split('/')[-1] if '/' in source_file else source_file
+                
+                # Determine source type
+                if source_file.endswith('.py'):
+                    source_type = 'PySpark'
+                elif source_file.endswith('.scala'):
+                    source_type = 'Scala'
+                elif source_file.endswith('.hql') or source_file.endswith('.sql'):
+                    source_type = 'Hive SQL'
+                elif source_file.endswith('.sh'):
+                    source_type = 'Shell'
+                else:
+                    source_type = 'Other'
             else:
-                source_type = 'Other'
+                # For dataset-to-dataset relationships (TRANSFORM)
+                source_file = source_dataset.name
+                short_file = source_file
+                source_type = source_dataset.metadata.get('dataset_type', 'unknown').upper()
             
             # Get dataset details
             dataset_name = dataset_node.name
@@ -525,10 +541,10 @@ class ExcelExporter:
         ws.cell(row, 1, "💡 Column Explanations:").font = Font(bold=True, size=11, color="0563C1")
         row += 1
         explanations = [
-            "• Target Dataset (Col 4): The table/file that the source job READS FROM or WRITES TO",
+            "• Target Dataset (Col 4): The table/file that the source job READS FROM or WRITES TO, or the result of a TRANSFORM",
             "• Dataset URN/Path (Col 5): Full path for FILES ONLY (HDFS/local/SFTP/S3). Empty for tables.",
             "• Schema.Table (Col 7): For TABLES ONLY - database.table format (e.g., analytics.customers, prod.users)",
-            "• Relationship (Col 3): READ = job reads from this dataset | WRITE = job writes to this dataset",
+            "• Relationship (Col 3): READ = job reads dataset | WRITE = job writes dataset | TRANSFORM = dataset transforms to dataset",
             "• Fully Resolved (Col 8): Yes = all variables resolved | No = contains ${VAR} or parameters",
         ]
         for explanation in explanations:
@@ -541,12 +557,13 @@ class ExcelExporter:
         row += 1
         instructions = [
             "1. Create Pivot Table: Select all data → Insert → Pivot Table",
-            "2. Relationships per source: Rows=Source File, Values=Count",
-            "3. Read/Write breakdown: Rows=Source File, Columns=Relationship, Values=Count",
-            "4. Find job inputs: Filter Relationship=READ, then filter Source File",
-            "5. Find job outputs: Filter Relationship=WRITE, then filter Source File",
-            "6. Hive table analysis: Filter Dataset Type=hive, use Schema.Table column",
-            "7. File analysis: Filter Dataset Type=hdfs/sftp/s3, use Dataset URN/Path column",
+            "2. Relationships per source: Rows=Source (Job/Dataset), Values=Count",
+            "3. Read/Write breakdown: Rows=Source, Columns=Relationship, Values=Count",
+            "4. Find job inputs: Filter Relationship=READ, then filter Source",
+            "5. Find job outputs: Filter Relationship=WRITE, then filter Source",
+            "6. Find transformations: Filter Relationship=TRANSFORM to see dataset-to-dataset flows",
+            "7. Hive table analysis: Filter Dataset Type=hive, use Schema.Table column",
+            "8. File analysis: Filter Dataset Type=hdfs/sftp/s3, use Dataset URN/Path column",
         ]
         for instruction in instructions:
             ws.cell(row, 1, instruction)
