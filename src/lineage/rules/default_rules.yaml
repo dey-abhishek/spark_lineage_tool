@@ -97,7 +97,7 @@ rules:
   - rule_id: hive_insert_overwrite
     applies_to:
       - hive
-    pattern: "INSERT\\s+OVERWRITE\\s+TABLE\\s+(?P<table>[\\w.]+)"
+    pattern: "INSERT\\s+OVERWRITE\\s+TABLE\\s+(?P<table>[\\w.${}:]+)"
     action: WRITE_HIVE_TABLE
     confidence: 0.90
     description: "Detect INSERT OVERWRITE TABLE statements"
@@ -106,7 +106,7 @@ rules:
   - rule_id: hive_insert_into
     applies_to:
       - hive
-    pattern: "INSERT\\s+INTO\\s+(?:TABLE\\s+)?(?P<table>[\\w.]+)"
+    pattern: "INSERT\\s+INTO\\s+(?:TABLE\\s+)?(?P<table>[\\w.${}:]+)"
     action: WRITE_HIVE_TABLE
     confidence: 0.90
     description: "Detect INSERT INTO TABLE statements"
@@ -115,7 +115,7 @@ rules:
   - rule_id: hive_create_table_as
     applies_to:
       - hive
-    pattern: "CREATE\\s+(?:EXTERNAL\\s+)?TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(?P<table>[\\w.]+)\\s+AS"
+    pattern: "CREATE\\s+(?:EXTERNAL\\s+)?TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(?P<table>[\\w.${}:]+)\\s+AS"
     action: WRITE_HIVE_TABLE
     confidence: 0.90
     description: "Detect CREATE TABLE AS SELECT statements"
@@ -124,7 +124,7 @@ rules:
   - rule_id: hive_from_table
     applies_to:
       - hive
-    pattern: "FROM\\s+(?P<table>[\\w.]+)"
+    pattern: "FROM\\s+(?P<table>[\\w.${}:]+)"
     action: READ_HIVE_TABLE
     confidence: 0.85
     description: "Detect FROM clauses"
@@ -133,7 +133,7 @@ rules:
   - rule_id: hive_join_table
     applies_to:
       - hive
-    pattern: "JOIN\\s+(?P<table>[\\w.]+)"
+    pattern: "JOIN\\s+(?P<table>[\\w.${}:]+)"
     action: READ_HIVE_TABLE
     confidence: 0.85
     description: "Detect JOIN clauses"
@@ -142,7 +142,7 @@ rules:
   - rule_id: hive_load_data
     applies_to:
       - hive
-    pattern: "LOAD\\s+DATA\\s+(?:LOCAL\\s+)?INPATH\\s+[\"'](?P<path>[^\"']+)[\"']\\s+INTO\\s+TABLE\\s+(?P<table>[\\w.]+)"
+    pattern: "LOAD\\s+DATA\\s+(?:LOCAL\\s+)?INPATH\\s+[\"'](?P<path>[^\"']+)[\"']\\s+INTO\\s+TABLE\\s+(?P<table>[\\w.${}:]+)"
     action: WRITE_HIVE_TABLE
     confidence: 0.90
     description: "Detect LOAD DATA INPATH statements"
@@ -151,7 +151,7 @@ rules:
   - rule_id: hive_alter_location
     applies_to:
       - hive
-    pattern: "ALTER\\s+TABLE\\s+(?P<table>[\\w.]+)\\s+SET\\s+LOCATION\\s+[\"'](?P<path>[^\"']+)[\"']"
+    pattern: "ALTER\\s+TABLE\\s+(?P<table>[\\w.${}:]+)\\s+SET\\s+LOCATION\\s+[\"'](?P<path>[^\"']+)[\"']"
     action: WRITE_HIVE_TABLE
     confidence: 0.85
     description: "Detect ALTER TABLE SET LOCATION"

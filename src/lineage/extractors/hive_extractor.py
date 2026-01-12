@@ -65,10 +65,10 @@ class HiveSQLParser:
             if token.ttype is Keyword and token_text in ("INTO", "OVERWRITE"):
                 in_insert = True
             elif in_insert and token.ttype is Keyword and token_text == "TABLE":
-                # Next non-keyword token is the table name
+                # Next non-keyword token is the table name (may span multiple tokens if variable)
                 for j in range(i + 1, len(tokens)):
                     if tokens[j].ttype not in (Keyword, sqlparse.tokens.Whitespace):
-                        table_name = self._clean_identifier(tokens[j].value)
+                        table_name = self._extract_full_identifier(tokens, j)
                         self.write_tables.add(table_name)
                         in_insert = False
                         break
@@ -77,7 +77,7 @@ class HiveSQLParser:
             if token.ttype is Keyword and token_text == "FROM":
                 in_from = True
             elif in_from and token.ttype not in (Keyword, sqlparse.tokens.Whitespace, sqlparse.tokens.Punctuation):
-                table_name = self._clean_identifier(token.value)
+                table_name = self._extract_full_identifier(tokens, i)
                 if table_name and not self._is_subquery_alias(table_name):
                     self.read_tables.add(table_name)
                 in_from = False
@@ -86,7 +86,7 @@ class HiveSQLParser:
             if token.ttype is Keyword and "JOIN" in token_text:
                 in_join = True
             elif in_join and token.ttype not in (Keyword, sqlparse.tokens.Whitespace):
-                table_name = self._clean_identifier(token.value)
+                table_name = self._extract_full_identifier(tokens, i)
                 if table_name:
                     self.read_tables.add(table_name)
                 in_join = False
@@ -104,7 +104,7 @@ class HiveSQLParser:
             if token.ttype is Keyword and token_text == "FROM":
                 in_from = True
             elif in_from and token.ttype not in (Keyword, sqlparse.tokens.Whitespace, sqlparse.tokens.Punctuation):
-                table_name = self._clean_identifier(token.value)
+                table_name = self._extract_full_identifier(tokens, i)
                 if table_name and not self._is_subquery_alias(table_name):
                     self.read_tables.add(table_name)
                 in_from = False
@@ -112,10 +112,90 @@ class HiveSQLParser:
             if token.ttype is Keyword and "JOIN" in token_text:
                 in_join = True
             elif in_join and token.ttype not in (Keyword, sqlparse.tokens.Whitespace):
-                table_name = self._clean_identifier(token.value)
+                table_name = self._extract_full_identifier(tokens, i)
                 if table_name:
                     self.read_tables.add(table_name)
                 in_join = False
+    
+    def _extract_full_identifier(self, tokens: List, start_idx: int) -> str:
+        """Extract full identifier including variable syntax that may span multiple tokens.
+        
+        Handles cases like:
+        - simple_table
+        - db.table
+        - db_${hivevar:env}.table (spans multiple tokens)
+        - table_${hivevar:var}
+        
+        sqlparse tokenizes gold_${hivevar:env} as:
+        - gold_$ (Name)
+        - { (Error)
+        - hivevar (Name)
+        - : (Punctuation)
+        - env (Name)
+        - } (Error)
+        We need to collect all these tokens.
+        """
+        identifier_parts = []
+        i = start_idx
+        in_variable = False  # Track if we're inside ${}
+        
+        # Keep consuming tokens that are part of the identifier
+        while i < len(tokens):
+            token = tokens[i]
+            value = token.value
+            ttype = token.ttype
+            
+            # Detect start of variable syntax
+            if value.endswith('$') or (value == '{' and i > 0 and tokens[i-1].value.endswith('$')):
+                in_variable = True
+            
+            # Detect end of variable syntax
+            if value == '}' and in_variable:
+                identifier_parts.append(value)
+                in_variable = False
+                i += 1
+                # Check if there's a dot after } for db.table notation
+                if i < len(tokens) and tokens[i].value == '.':
+                    continue
+                else:
+                    break
+            
+            # Stop at keywords (unless we're in a variable)
+            if ttype == Keyword and value.upper() not in ('AS',) and not in_variable:
+                break
+            
+            # Stop at whitespace (unless in variable)
+            if ttype == sqlparse.tokens.Whitespace and not in_variable:
+                break
+            
+            # Stop at certain punctuation (except when part of variable or db.table notation)
+            if ttype == sqlparse.tokens.Punctuation:
+                if value in ('.', ':'):
+                    # Keep dots and colons (db.table, hivevar:env)
+                    identifier_parts.append(value)
+                    i += 1
+                    continue
+                elif value in ('{', '}'):
+                    # Keep braces as part of variable
+                    identifier_parts.append(value)
+                    i += 1
+                    continue
+                elif not in_variable:
+                    # Other punctuation stops the identifier
+                    break
+            
+            # Stop at SQL keywords/operators (unless in variable)
+            if not in_variable and value.upper() in ('WHERE', 'ON', 'AND', 'OR', 'SELECT', 'FROM', 'JOIN', 
+                                  'LEFT', 'RIGHT', 'INNER', 'OUTER', 'GROUP', 'ORDER', 'LIMIT',
+                                  'PARTITION', 'SET', '(', ')', ',', ';'):
+                break
+            
+            # Include this token (including Error tokens when they're part of variable syntax)
+            identifier_parts.append(value)
+            i += 1
+        
+        full_identifier = ''.join(identifier_parts)
+        return self._clean_identifier(full_identifier)
     
     def _parse_create(self, statement: sqlparse.sql.Statement) -> None:
         """Parse CREATE statement."""
@@ -190,9 +270,14 @@ class HiveSQLParser:
             self.write_tables.add(self._clean_identifier(view_match.group(1)))
     
     def _clean_identifier(self, identifier: str) -> str:
-        """Clean table/column identifier."""
-        # Remove backticks, quotes, trailing commas/semicolons
+        """Clean table/column identifier, preserving variable syntax."""
+        # Remove backticks, quotes, trailing commas/semicolons/parentheses/whitespace
+        # BUT preserve variable syntax: $, {, }, :
         identifier = identifier.strip("`'\"(); \t\n")
+        
+        # Don't strip $ which is part of variable syntax
+        # Variables can be: ${var}, ${hivevar:var}, ${hiveconf:var}, etc.
+        
         # Handle database.table notation
         if "." in identifier:
             parts = identifier.split(".")
