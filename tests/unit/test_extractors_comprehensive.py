@@ -566,7 +566,7 @@ class TestMultiFormatSupport:
         assert len(detected_patterns) >= 3, f"Should detect at least 3 different formats, found: {detected_patterns}"
         
         # Check for Hive table operations
-        hive_facts = [f for f in facts if f.dataset_type == "hive" or "warehouse" in f.dataset_urn.lower()]
+        hive_facts = [f for f in facts if f.dataset_type == "hive" or (f.dataset_urn and "warehouse" in f.dataset_urn.lower())]
         assert len(hive_facts) >= 2, "Should detect Hive table operations"
     
     def test_rdd_operations_pyspark(self, pyspark_extractor):
@@ -595,7 +595,7 @@ class TestMultiFormatSupport:
         assert len(write_facts) >= 3, "Should detect writes despite UDF usage"
         
         # Check for Hive operations
-        hive_ops = [f for f in facts if "warehouse" in f.dataset_urn.lower() or "analytics" in f.dataset_urn.lower()]
+        hive_ops = [f for f in facts if f.dataset_urn and ("warehouse" in f.dataset_urn.lower() or "analytics" in f.dataset_urn.lower())]
         assert len(hive_ops) >= 2, "Should detect Hive table operations in UDF job"
         
         # Verify various output formats
@@ -621,7 +621,7 @@ class TestMultiFormatSupport:
         assert len(write_facts) >= 3, f"Should detect multiple writes, found {len(write_facts)}"
         
         # Check for Hive tables
-        hive_tables = [f for f in facts if f.dataset_type == "hive" or "_warehouse" in f.dataset_urn]
+        hive_tables = [f for f in facts if f.dataset_type == "hive" or (f.dataset_urn and "_warehouse" in f.dataset_urn)]
         assert len(hive_tables) >= 1, "Should detect Hive table references"
         
         # Verify format diversity in evidence
