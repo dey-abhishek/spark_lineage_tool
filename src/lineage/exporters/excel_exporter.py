@@ -358,16 +358,17 @@ class ExcelExporter:
         ws = wb.create_sheet("Analytics (Pivot-Ready)")
         
         # Header with explanation
-        ws['A1'] = "Lineage Relationships - Each row shows: Job→Dataset OR Dataset→Dataset transformations"
+        ws['A1'] = "Lineage Relationships - Source Dataset → Job → Target Dataset"
         ws['A1'].font = Font(size=12, bold=True, color="0563C1")
-        ws.merge_cells('A1:I1')
+        ws.merge_cells('A1:K1')
         
-        # Column headers - simplified and focused
+        # Column headers - NEW structure with Source and Target
         headers = [
-            "Source (Job/Dataset)", "Source Type",
+            "Source Dataset", "Source Type", "Source Schema.Table",
+            "Job Name",
             "Relationship", 
-            "Target Dataset", "Dataset URN/Path", "Dataset Type",
-            "Schema.Table",
+            "Target Dataset", "Target Type", "Target Schema.Table",
+            "Dataset URN/Path",
             "Fully Resolved", "Wave"
         ]
         for col, header in enumerate(headers, 1):
@@ -376,13 +377,15 @@ class ExcelExporter:
         
         # Add helpful column descriptions in row 2
         descriptions = [
-            "Job file or Dataset name",
-            "PySpark/Scala/Hive/HDFS",
+            "Input dataset (for READ)",
+            "Type of source",
+            "database.table",
+            "Job that reads/writes",
             "READ/WRITE/TRANSFORM",
-            "Target table/file name",
-            "For files only (HDFS/SFTP/S3)",
-            "hive/hdfs/jdbc/sftp",
-            "For tables (database.table)",
+            "Output dataset",
+            "Type of target",
+            "database.table",
+            "Paths for files",
             "All variables resolved?",
             "Migration wave"
         ]
@@ -401,138 +404,131 @@ class ExcelExporter:
             if not source_node or not target_node:
                 continue
             
-            # Handle dataset-to-dataset edges (PRODUCES/TRANSFORM relationships)
+            # Determine relationship type and extract source/target/job
+            source_dataset_node = None
+            target_dataset_node = None
+            job_node = None
+            job_name = ""
+            relationship = ""
+            
             if source_node.node_type == NodeType.DATASET and target_node.node_type == NodeType.DATASET:
-                # This is a transformation: Source Dataset → Target Dataset
+                # TRANSFORM: Source Dataset → Target Dataset (no job)
                 source_dataset_node = source_node
                 target_dataset_node = target_node
-                
-                # Use source dataset as "job" for pivot display
-                job_node = None
-                dataset_node = target_dataset_node
-                source_dataset = source_dataset_node
                 relationship = "TRANSFORM"
-            # Handle job-to-dataset edges
-            elif source_node.node_type == NodeType.JOB:
+                job_name = "(direct transformation)"
+            elif source_node.node_type == NodeType.JOB and target_node.node_type == NodeType.DATASET:
+                # WRITE: Job → Target Dataset
                 job_node = source_node
-                dataset_node = target_node
-                source_dataset = None
+                target_dataset_node = target_node
                 relationship = "WRITE"
-            elif target_node.node_type == NodeType.JOB:
+                source_file = job_node.metadata.get('source_file', 'Unknown')
+                job_name = source_file.split('/')[-1] if '/' in source_file else source_file
+            elif source_node.node_type == NodeType.DATASET and target_node.node_type == NodeType.JOB:
+                # READ: Source Dataset → Job
+                source_dataset_node = source_node
                 job_node = target_node
-                dataset_node = source_node
-                source_dataset = None
                 relationship = "READ"
+                source_file = job_node.metadata.get('source_file', 'Unknown')
+                job_name = source_file.split('/')[-1] if '/' in source_file else source_file
             else:
                 continue
             
-            # Extract details
-            if job_node:
-                # For job-to-dataset relationships
-                source_file = job_node.metadata.get('source_file', 'Unknown')
-                short_file = source_file.split('/')[-1] if '/' in source_file else source_file
-                
-                # Determine source type
-                if source_file.endswith('.py'):
-                    source_type = 'PySpark'
-                elif source_file.endswith('.scala'):
-                    source_type = 'Scala'
-                elif source_file.endswith('.hql') or source_file.endswith('.sql'):
-                    source_type = 'Hive SQL'
-                elif source_file.endswith('.sh'):
-                    source_type = 'Shell'
-                else:
-                    source_type = 'Other'
-            else:
-                # For dataset-to-dataset relationships (TRANSFORM)
-                source_file = source_dataset.name
-                short_file = source_file
-                source_type = source_dataset.metadata.get('dataset_type', 'unknown').upper()
+            # Extract source dataset details (for READ and TRANSFORM)
+            source_dataset_name = ""
+            source_dataset_type = ""
+            source_schema_table = ""
+            if source_dataset_node:
+                source_dataset_name = source_dataset_node.name
+                source_dataset_type = source_dataset_node.metadata.get('dataset_type', 'unknown')
+                # Extract schema.table for source if it's a table
+                if source_dataset_type in ['hive', 'table', 'jdbc', 'oracle', 'mysql', 'postgres', 'mssql']:
+                    if '.' in source_dataset_name and not source_dataset_name.startswith('/'):
+                        source_schema_table = source_dataset_name
             
-            # Get dataset details
-            dataset_name = dataset_node.name
-            dataset_urn = dataset_node.urn or dataset_name
-            dataset_type = dataset_node.metadata.get('dataset_type', 'unknown')
-            
-            # For JDBC: if dataset_name contains SQL query, try to extract table name for display
-            display_name = dataset_name
-            if dataset_type in ['jdbc', 'oracle', 'mysql', 'postgres', 'mssql']:
-                # Check if name contains SQL keywords or is too long (likely a query)
-                if any(keyword in dataset_name.upper() for keyword in ['SELECT', 'FROM', 'WHERE', 'JOIN']) or len(dataset_name) > 50:
-                    # Extract table name from query
-                    table_name = self._extract_table_from_jdbc_query(dataset_name)
-                    if table_name and not table_name.startswith('(query:'):
-                        display_name = table_name
-            
-            # Extract schema.table format if it's a Hive table
-            schema_table = ""
-            if dataset_type in ['hive', 'table']:
-                # Check if name already has schema.table format
-                if '.' in display_name and not display_name.startswith('/'):
-                    schema_table = display_name
-                elif '.' in dataset_urn and not dataset_urn.startswith('/') and '://' not in dataset_urn:
-                    schema_table = dataset_urn
-            
-            # For JDBC tables, also try to get schema.table
-            if dataset_type in ['jdbc', 'oracle', 'mysql', 'postgres', 'mssql']:
-                if '.' in display_name and not display_name.startswith('/'):
-                    schema_table = display_name
-            
-            # Dataset URN/Path - ONLY for files (hdfs/local/sftp), empty for tables
+            # Extract target dataset details (for WRITE and TRANSFORM)
+            target_dataset_name = ""
+            target_dataset_type = ""
+            target_schema_table = ""
+            target_dataset_urn = ""
             display_urn = ""
-            original_urn = dataset_node.metadata.get('original_urn', '')
-            resolved_urn = dataset_node.metadata.get('resolved_urn', dataset_urn)
-            
-            if dataset_type in ['hdfs', 'file', 'local', 'sftp', 's3', 'gcs']:
-                # Check if there was a transformation (pattern → resolved)
-                if original_urn and resolved_urn and original_urn != resolved_urn:
-                    # Check if original had parameter syntax
-                    if '${' in original_urn and (':-' in original_urn or '$(date' in original_urn):
-                        # Show: pattern → resolved
-                        display_urn = f"{original_urn} → {resolved_urn}"
+            if target_dataset_node:
+                target_dataset_name = target_dataset_node.name
+                target_dataset_urn = target_dataset_node.urn or target_dataset_name
+                target_dataset_type = target_dataset_node.metadata.get('dataset_type', 'unknown')
+                
+                # For JDBC: clean up SQL queries
+                if target_dataset_type in ['jdbc', 'oracle', 'mysql', 'postgres', 'mssql']:
+                    if any(keyword in target_dataset_name.upper() for keyword in ['SELECT', 'FROM', 'WHERE', 'JOIN']) or len(target_dataset_name) > 50:
+                        table_name = self._extract_table_from_jdbc_query(target_dataset_name)
+                        if table_name and not table_name.startswith('(query:'):
+                            target_dataset_name = table_name
+                
+                # Extract schema.table for target if it's a table
+                if target_dataset_type in ['hive', 'table']:
+                    if '.' in target_dataset_name and not target_dataset_name.startswith('/'):
+                        target_schema_table = target_dataset_name
+                    elif '.' in target_dataset_urn and not target_dataset_urn.startswith('/') and '://' not in target_dataset_urn:
+                        target_schema_table = target_dataset_urn
+                
+                # For JDBC tables
+                if target_dataset_type in ['jdbc', 'oracle', 'mysql', 'postgres', 'mssql']:
+                    if '.' in target_dataset_name and not target_dataset_name.startswith('/'):
+                        target_schema_table = target_dataset_name
+                
+                # Dataset URN/Path - ONLY for files
+                original_urn = target_dataset_node.metadata.get('original_urn', '')
+                resolved_urn = target_dataset_node.metadata.get('resolved_urn', target_dataset_urn)
+                
+                if target_dataset_type in ['hdfs', 'file', 'local', 'sftp', 's3', 'gcs']:
+                    if original_urn and resolved_urn and original_urn != resolved_urn:
+                        if '${' in original_urn and (':-' in original_urn or '$(date' in original_urn):
+                            display_urn = f"{original_urn} → {resolved_urn}"
+                        else:
+                            display_urn = resolved_urn
                     else:
-                        # Just show resolved
-                        display_urn = resolved_urn
-                else:
-                    # Show resolved value
-                    if resolved_urn and (resolved_urn.startswith('/') or '://' in resolved_urn):
-                        display_urn = resolved_urn
-                    elif dataset_urn and (dataset_urn.startswith('/') or '://' in dataset_urn):
-                        display_urn = dataset_urn
-                    elif dataset_name.startswith('/') or '://' in dataset_name:
-                        display_urn = dataset_name
-            # For tables (hive/jdbc), leave URN empty - use Schema.Table column instead
+                        if resolved_urn and (resolved_urn.startswith('/') or '://' in resolved_urn):
+                            display_urn = resolved_urn
+                        elif target_dataset_urn and (target_dataset_urn.startswith('/') or '://' in target_dataset_urn):
+                            display_urn = target_dataset_urn
+                        elif target_dataset_name.startswith('/') or '://' in target_dataset_name:
+                            display_urn = target_dataset_name
             
-            # Get metrics if available
-            metrics = self.metrics.get(dataset_node.node_id, None)
-            wave = metrics.migration_wave if metrics else 0
+            # Determine if fully resolved
+            fully_resolved = True
+            if target_dataset_node:
+                fully_resolved = target_dataset_node.metadata.get('fully_resolved', False)
+                if not fully_resolved:
+                    check_string = f"{target_dataset_name}{target_dataset_urn}{display_urn}"
+                    if '${' in check_string or '$(' in check_string:
+                        fully_resolved = False
+                    else:
+                        fully_resolved = True
             
-            # Determine if fully resolved (no placeholders)
-            fully_resolved = dataset_node.metadata.get('fully_resolved', False)
-            if not fully_resolved:
-                # Check display_urn for files, display_name for tables
-                check_value = display_urn if display_urn else display_name
-                if '${' in check_value or '*' in check_value:
-                    fully_resolved = False
-                else:
-                    fully_resolved = True
+            # Get metrics for wave
+            wave = 0
+            if target_dataset_node:
+                metrics = self.metrics.get(target_dataset_node.node_id, None)
+                wave = metrics.migration_wave if metrics else 0
             
-            # Populate row - simplified columns (9 total)
-            ws.cell(row, 1, short_file)
-            ws.cell(row, 2, source_type)
-            ws.cell(row, 3, relationship)
-            ws.cell(row, 4, display_name[:100])  # Target Dataset - cleaned name
-            ws.cell(row, 5, display_urn[:200] if display_urn else "")  # Dataset URN/Path - only for files
-            ws.cell(row, 6, dataset_type)
-            ws.cell(row, 7, schema_table if schema_table else "")  # Schema.Table - only for tables
-            ws.cell(row, 8, "Yes" if fully_resolved else "No")     # Fully Resolved
-            ws.cell(row, 9, f"Wave {wave}" if wave > 0 else "N/A") # Wave
+            # Populate row - NEW structure (11 columns)
+            ws.cell(row, 1, source_dataset_name[:100] if source_dataset_name else "")  # Source Dataset
+            ws.cell(row, 2, source_dataset_type if source_dataset_name else "")          # Source Type
+            ws.cell(row, 3, source_schema_table if source_schema_table else "")          # Source Schema.Table
+            ws.cell(row, 4, job_name[:100])                                              # Job Name
+            ws.cell(row, 5, relationship)                                                # Relationship
+            ws.cell(row, 6, target_dataset_name[:100] if target_dataset_name else "")   # Target Dataset
+            ws.cell(row, 7, target_dataset_type if target_dataset_name else "")          # Target Type
+            ws.cell(row, 8, target_schema_table if target_schema_table else "")          # Target Schema.Table
+            ws.cell(row, 9, display_urn[:200] if display_urn else "")                    # Dataset URN/Path
+            ws.cell(row, 10, "Yes" if fully_resolved else "No")                         # Fully Resolved
+            ws.cell(row, 11, f"Wave {wave}" if wave > 0 else "N/A")                     # Wave
             
             # Color-code fully resolved status
             if fully_resolved:
-                ws.cell(row, 8).fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+                ws.cell(row, 10).fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
             else:
-                ws.cell(row, 8).fill = PatternFill(start_color="FFF4E6", end_color="FFF4E6", fill_type="solid")
+                ws.cell(row, 10).fill = PatternFill(start_color="FFF4E6", end_color="FFF4E6", fill_type="solid")
             
             row += 1
         
@@ -541,15 +537,16 @@ class ExcelExporter:
         ws.cell(row, 1, "💡 Column Explanations:").font = Font(bold=True, size=11, color="0563C1")
         row += 1
         explanations = [
-            "• Target Dataset (Col 4): The table/file that the source job READS FROM or WRITES TO, or the result of a TRANSFORM",
-            "• Dataset URN/Path (Col 5): Full path for FILES ONLY (HDFS/local/SFTP/S3). Empty for tables.",
-            "• Schema.Table (Col 7): For TABLES ONLY - database.table format (e.g., analytics.customers, prod.users)",
-            "• Relationship (Col 3): READ = job reads dataset | WRITE = job writes dataset | TRANSFORM = dataset transforms to dataset",
-            "• Fully Resolved (Col 8): Yes = all variables resolved | No = contains ${VAR} or parameters",
+            "• Source Dataset (Col 1): Input dataset that is READ by the job (empty for WRITE relationships)",
+            "• Job Name (Col 4): The script/application that processes the data",
+            "• Target Dataset (Col 6): Output dataset that is WRITTEN by the job (empty for READ relationships)",
+            "• Relationship (Col 5): READ = job reads from source | WRITE = job writes to target | TRANSFORM = source transforms to target",
+            "• Dataset URN/Path (Col 9): Full path for FILES ONLY (HDFS/local/SFTP/S3). Empty for tables.",
+            "• Schema.Table (Col 3 & 8): For TABLES - database.table format (e.g., analytics.customers, prod.users)",
         ]
         for explanation in explanations:
             ws.cell(row, 1, explanation)
-            ws.merge_cells(f'A{row}:F{row}')
+            ws.merge_cells(f'A{row}:H{row}')
             row += 1
         
         row += 1
@@ -557,29 +554,30 @@ class ExcelExporter:
         row += 1
         instructions = [
             "1. Create Pivot Table: Select all data → Insert → Pivot Table",
-            "2. Relationships per source: Rows=Source (Job/Dataset), Values=Count",
-            "3. Read/Write breakdown: Rows=Source, Columns=Relationship, Values=Count",
-            "4. Find job inputs: Filter Relationship=READ, then filter Source",
-            "5. Find job outputs: Filter Relationship=WRITE, then filter Source",
-            "6. Find transformations: Filter Relationship=TRANSFORM to see dataset-to-dataset flows",
-            "7. Hive table analysis: Filter Dataset Type=hive, use Schema.Table column",
-            "8. File analysis: Filter Dataset Type=hdfs/sftp/s3, use Dataset URN/Path column",
+            "2. Find job inputs: Filter Relationship=READ, then check Source Dataset column",
+            "3. Find job outputs: Filter Relationship=WRITE, then check Target Dataset column",
+            "4. Find transformations: Filter Relationship=TRANSFORM to see source→target dataset flows",
+            "5. Analyze by job: Group by Job Name to see all inputs and outputs per job",
+            "6. Hive table analysis: Filter Source/Target Type=hive, use Schema.Table columns",
+            "7. File analysis: Filter Source/Target Type=hdfs/sftp/s3, use Dataset URN/Path column",
         ]
         for instruction in instructions:
             ws.cell(row, 1, instruction)
-            ws.merge_cells(f'A{row}:E{row}')
+            ws.merge_cells(f'A{row}:G{row}')
             row += 1
         
-        # Auto-size columns (9 columns now)
-        ws.column_dimensions['A'].width = 30  # Source File
-        ws.column_dimensions['B'].width = 15  # Source Type
-        ws.column_dimensions['C'].width = 12  # Relationship
-        ws.column_dimensions['D'].width = 40  # Target Dataset
-        ws.column_dimensions['E'].width = 55  # Dataset URN/Path
-        ws.column_dimensions['F'].width = 12  # Dataset Type
-        ws.column_dimensions['G'].width = 35  # Schema.Table
-        ws.column_dimensions['H'].width = 15  # Fully Resolved
-        ws.column_dimensions['I'].width = 10  # Wave
+        # Auto-size columns (11 columns now)
+        ws.column_dimensions['A'].width = 35  # Source Dataset
+        ws.column_dimensions['B'].width = 12  # Source Type
+        ws.column_dimensions['C'].width = 30  # Source Schema.Table
+        ws.column_dimensions['D'].width = 35  # Job Name
+        ws.column_dimensions['E'].width = 12  # Relationship
+        ws.column_dimensions['F'].width = 35  # Target Dataset
+        ws.column_dimensions['G'].width = 12  # Target Type
+        ws.column_dimensions['H'].width = 30  # Target Schema.Table
+        ws.column_dimensions['I'].width = 55  # Dataset URN/Path
+        ws.column_dimensions['J'].width = 15  # Fully Resolved
+        ws.column_dimensions['K'].width = 10  # Wave
     
     def _create_datasets_sheet(self, wb: Workbook) -> None:
         """Create all datasets sheet."""
