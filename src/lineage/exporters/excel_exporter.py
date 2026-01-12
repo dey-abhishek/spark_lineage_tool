@@ -33,20 +33,45 @@ class ExcelExporter:
         
         # Remove outer parentheses if present
         query = query.strip()
-        if query.startswith('(') and query.endswith(')'):
+        while query.startswith('(') and query.endswith(')'):
             query = query[1:-1].strip()
         
-        # Try to extract FROM clause
+        # Pattern 1: Simple table name at start (before WHERE/JOIN/ORDER)
+        # Example: "CUSTOMERS WHERE ..." -> "CUSTOMERS"
+        simple_pattern = r'^([a-zA-Z_][\w.]*?)(?:\s+WHERE|\s+JOIN|\s+ORDER|\s+GROUP|\s+LIMIT|\s*$)'
+        match = re.search(simple_pattern, query, re.IGNORECASE)
+        if match:
+            table_name = match.group(1).strip()
+            # Make sure it's not a SQL keyword
+            if table_name.upper() not in ['SELECT', 'WITH', 'INSERT', 'UPDATE', 'DELETE']:
+                return table_name.lower()
+        
+        # Pattern 2: SELECT ... FROM table_name
         from_pattern = r'FROM\s+([a-zA-Z_][\w.]*)'
         match = re.search(from_pattern, query, re.IGNORECASE)
         if match:
-            table_name = match.group(1)
-            # Clean up
-            table_name = table_name.split()[0]
-            return table_name
+            table_name = match.group(1).strip()
+            # Remove any trailing SQL keywords
+            table_name = re.split(r'\s+WHERE|\s+JOIN|\s+ORDER', table_name, flags=re.IGNORECASE)[0]
+            # Handle schema.table
+            table_parts = table_name.split('.')
+            if len(table_parts) > 1:
+                # Return schema.table
+                return '.'.join(table_parts[-2:]).lower()
+            return table_name.lower()
         
-        # If no FROM found, return truncated query
-        return f"(query:{query[:40]}...)"
+        # Pattern 3: INTO clause (for INSERT)
+        into_pattern = r'INTO\s+([a-zA-Z_][\w.]*)'
+        match = re.search(into_pattern, query, re.IGNORECASE)
+        if match:
+            table_name = match.group(1).strip()
+            table_parts = table_name.split('.')
+            if len(table_parts) > 1:
+                return '.'.join(table_parts[-2:]).lower()
+            return table_name.lower()
+        
+        # If no pattern found, return truncated query
+        return f"(query:{query[:30]}...)"
     
     def export(self, output_path: Path) -> None:
         """Export to Excel workbook with multiple sheets."""
@@ -355,9 +380,9 @@ class ExcelExporter:
             "PySpark/Hive/etc",
             "READ or WRITE",
             "Table/file name",
-            "Full path/URN",
-            "hive/hdfs/jdbc",
-            "database.table (Hive only)",
+            "For files only (HDFS/SFTP/S3)",
+            "hive/hdfs/jdbc/sftp",
+            "For tables (database.table)",
             "All variables resolved?",
             "Migration wave"
         ]
@@ -416,19 +441,9 @@ class ExcelExporter:
             # For JDBC: if dataset_name contains SQL query, try to extract table name for display
             display_name = dataset_name
             if dataset_type in ['jdbc', 'oracle', 'mysql', 'postgres', 'mssql']:
-                # Check if it's a URL#query pattern
-                if '#' in dataset_name:
-                    # Split URL and query
-                    parts = dataset_name.split('#', 1)
-                    query_part = parts[1] if len(parts) > 1 else dataset_name
-                    
-                    # Try to extract table name from query
-                    if 'SELECT' in query_part.upper() or 'FROM' in query_part.upper():
-                        table_name = self._extract_table_from_jdbc_query(query_part)
-                        if table_name and not table_name.startswith('(query:'):
-                            display_name = table_name
-                elif 'SELECT' in dataset_name.upper() or 'FROM' in dataset_name.upper():
-                    # Direct query in name
+                # Check if name contains SQL keywords or is too long (likely a query)
+                if any(keyword in dataset_name.upper() for keyword in ['SELECT', 'FROM', 'WHERE', 'JOIN']) or len(dataset_name) > 50:
+                    # Extract table name from query
                     table_name = self._extract_table_from_jdbc_query(dataset_name)
                     if table_name and not table_name.startswith('(query:'):
                         display_name = table_name
@@ -442,14 +457,20 @@ class ExcelExporter:
                 elif '.' in dataset_urn and not dataset_urn.startswith('/') and '://' not in dataset_urn:
                     schema_table = dataset_urn
             
-            # For file-based datasets, prefer URN (which has the full path)
-            display_urn = dataset_urn
-            if dataset_type in ['hdfs', 'file', 'local']:
-                # URN should have the full path
+            # For JDBC tables, also try to get schema.table
+            if dataset_type in ['jdbc', 'oracle', 'mysql', 'postgres', 'mssql']:
+                if '.' in display_name and not display_name.startswith('/'):
+                    schema_table = display_name
+            
+            # Dataset URN/Path - ONLY for files (hdfs/local/sftp), empty for tables
+            display_urn = ""
+            if dataset_type in ['hdfs', 'file', 'local', 'sftp', 's3', 'gcs']:
+                # Show full path for file-based datasets
                 if dataset_urn and (dataset_urn.startswith('/') or '://' in dataset_urn):
                     display_urn = dataset_urn
                 elif dataset_name.startswith('/') or '://' in dataset_name:
                     display_urn = dataset_name
+            # For tables (hive/jdbc), leave URN empty - use Schema.Table column instead
             
             # Get metrics if available
             metrics = self.metrics.get(dataset_node.node_id, None)
@@ -458,8 +479,9 @@ class ExcelExporter:
             # Determine if fully resolved (no placeholders)
             fully_resolved = dataset_node.metadata.get('fully_resolved', False)
             if not fully_resolved:
-                # Check if URN has unresolved variables
-                if '${' in display_urn or '*' in display_urn:
+                # Check display_urn for files, display_name for tables
+                check_value = display_urn if display_urn else display_name
+                if '${' in check_value or '*' in check_value:
                     fully_resolved = False
                 else:
                     fully_resolved = True
@@ -469,11 +491,11 @@ class ExcelExporter:
             ws.cell(row, 2, source_type)
             ws.cell(row, 3, relationship)
             ws.cell(row, 4, display_name[:100])  # Target Dataset - cleaned name
-            ws.cell(row, 5, display_urn[:200])   # Dataset URN/Path
+            ws.cell(row, 5, display_urn[:200] if display_urn else "")  # Dataset URN/Path - only for files
             ws.cell(row, 6, dataset_type)
-            ws.cell(row, 7, schema_table if schema_table else "N/A")  # Schema.Table
-            ws.cell(row, 8, "Yes" if fully_resolved else "No")        # Fully Resolved
-            ws.cell(row, 9, f"Wave {wave}" if wave > 0 else "N/A")    # Wave
+            ws.cell(row, 7, schema_table if schema_table else "")  # Schema.Table - only for tables
+            ws.cell(row, 8, "Yes" if fully_resolved else "No")     # Fully Resolved
+            ws.cell(row, 9, f"Wave {wave}" if wave > 0 else "N/A") # Wave
             
             # Color-code fully resolved status
             if fully_resolved:
@@ -489,8 +511,8 @@ class ExcelExporter:
         row += 1
         explanations = [
             "• Target Dataset (Col 4): The table/file that the source job READS FROM or WRITES TO",
-            "• Dataset URN/Path (Col 5): Full path for files (e.g., hdfs:///data/raw/customers) or qualified name for tables",
-            "• Schema.Table (Col 7): For Hive tables only - database.table format (e.g., analytics.customers)",
+            "• Dataset URN/Path (Col 5): Full path for FILES ONLY (HDFS/local/SFTP/S3). Empty for tables.",
+            "• Schema.Table (Col 7): For TABLES ONLY - database.table format (e.g., analytics.customers, prod.users)",
             "• Relationship (Col 3): READ = job reads from this dataset | WRITE = job writes to this dataset",
             "• Fully Resolved (Col 8): Yes = all variables resolved | No = contains ${VAR} or parameters",
         ]
@@ -509,6 +531,7 @@ class ExcelExporter:
             "4. Find job inputs: Filter Relationship=READ, then filter Source File",
             "5. Find job outputs: Filter Relationship=WRITE, then filter Source File",
             "6. Hive table analysis: Filter Dataset Type=hive, use Schema.Table column",
+            "7. File analysis: Filter Dataset Type=hdfs/sftp/s3, use Dataset URN/Path column",
         ]
         for instruction in instructions:
             ws.cell(row, 1, instruction)
