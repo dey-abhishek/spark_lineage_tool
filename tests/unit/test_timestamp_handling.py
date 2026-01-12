@@ -38,11 +38,11 @@ hdfs dfs -put /local/data /hdfs/data_${TIMESTAMP}
         assert config_dict["TIMESTAMP"].isdigit()
     
     def test_timestamp_with_separators(self):
-        """Test timestamp with various separators."""
+        """Test timestamp with various separators (filesystem-safe)."""
         script = '''#!/bin/bash
 TS1=$(date +%Y-%m-%d_%H-%M-%S)
 TS2=$(date +%Y%m%d_%H%M%S)
-TS3=$(date +%Y-%m-%d_%H:%M:%S)
+TS3=$(date +%Y%m%d-%H%M%S)
 '''
         
         extractor = ShellExtractor()
@@ -56,17 +56,20 @@ TS3=$(date +%Y-%m-%d_%H:%M:%S)
         assert "TS2" in config_dict
         assert "TS3" in config_dict
         
-        # Check formats
+        # Check formats (all filesystem-safe, no colons)
         assert "_" in config_dict["TS1"]  # Has underscore separator
         assert "-" in config_dict["TS1"]  # Has dash separator
+        assert ":" not in config_dict["TS1"]  # No colons!
         assert "_" in config_dict["TS2"]  # Has underscore
-        assert ":" in config_dict["TS3"]  # Has colon
+        assert ":" not in config_dict["TS2"]  # No colons!
+        assert "-" in config_dict["TS3"]  # Has dash
+        assert ":" not in config_dict["TS3"]  # No colons!
     
     def test_iso8601_timestamp(self):
-        """Test ISO 8601 format timestamps."""
+        """Test ISO-like format timestamps (filesystem-safe)."""
         script = '''#!/bin/bash
-ISO_TS=$(date +%Y-%m-%dT%H:%M:%S)
-ISO_TZ=$(date +%Y-%m-%dT%H:%M:%SZ)
+ISO_TS=$(date +%Y-%m-%dT%H%M%S)
+ISO_COMPACT=$(date +%Y%m%dT%H%M%S)
 '''
         
         extractor = ShellExtractor()
@@ -77,9 +80,10 @@ ISO_TZ=$(date +%Y-%m-%dT%H:%M:%SZ)
         
         assert "ISO_TS" in config_dict
         assert "T" in config_dict["ISO_TS"]  # ISO format has T separator
+        assert ":" not in config_dict["ISO_TS"]  # But no colons (filesystem-safe!)
         
-        assert "ISO_TZ" in config_dict
-        assert config_dict["ISO_TZ"].endswith("Z")  # UTC timezone marker
+        assert "ISO_COMPACT" in config_dict
+        assert "T" in config_dict["ISO_COMPACT"]
     
     def test_unix_timestamp(self):
         """Test Unix timestamp (seconds since epoch)."""
@@ -100,9 +104,9 @@ BACKUP_PATH="/backup/${UNIX_TS}"
         assert 9 <= len(config_dict["UNIX_TS"]) <= 11
     
     def test_time_only_formats(self):
-        """Test time-only formats (HH:MM:SS)."""
+        """Test time-only formats (filesystem-safe, no colons)."""
         script = '''#!/bin/bash
-TIME_COLON=$(date +%H:%M:%S)
+TIME_DASH=$(date +%H-%M-%S)
 TIME_COMPACT=$(date +%H%M%S)
 HOUR=$(date +%H)
 '''
@@ -113,8 +117,9 @@ HOUR=$(date +%H)
         config_facts = [f for f in facts if f.__class__.__name__ == 'ConfigFact']
         config_dict = {f.config_key: f.config_value for f in config_facts}
         
-        assert "TIME_COLON" in config_dict
-        assert ":" in config_dict["TIME_COLON"]
+        assert "TIME_DASH" in config_dict
+        assert "-" in config_dict["TIME_DASH"]
+        assert ":" not in config_dict["TIME_DASH"]  # No colons!
         
         assert "TIME_COMPACT" in config_dict
         assert len(config_dict["TIME_COMPACT"]) == 6  # HHMMSS

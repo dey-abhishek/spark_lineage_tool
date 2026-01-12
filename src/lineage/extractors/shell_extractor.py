@@ -170,6 +170,7 @@ class ShellExtractor(BaseExtractor):
         now = datetime.now()
         
         # Pattern mappings to actual date formats (including timestamps)
+        # NOTE: Focusing on filesystem-safe formats (no colons for Windows compatibility)
         date_patterns = [
             # Date only formats
             (r'\$\(date\s+\+%Y-%m-%d\)', now.strftime('%Y-%m-%d')),  # 2024-01-15
@@ -184,30 +185,28 @@ class ShellExtractor(BaseExtractor):
             (r'`date\s+\+%d`', now.strftime('%d')),
             (r'\$\(date\s+\+%Y-%m\)', now.strftime('%Y-%m')),  # 2024-01
             (r'`date\s+\+%Y-%m`', now.strftime('%Y-%m')),
-            (r'\$\(date\s+\+%Y/%m/%d\)', now.strftime('%Y/%m/%d')),  # 2024/01/15
+            (r'\$\(date\s+\+%Y/%m/%d\)', now.strftime('%Y/%m/%d')),  # 2024/01/15 (for paths)
             (r'`date\s+\+%Y/%m/%d`', now.strftime('%Y/%m/%d')),
             (r'\$\(date\s+\+%Y\.%m\.%d\)', now.strftime('%Y.%m.%d')),  # 2024.01.15
             (r'`date\s+\+%Y\.%m\.%d`', now.strftime('%Y.%m.%d')),
             
-            # Timestamp formats (Date + Time)
+            # Timestamp formats (Date + Time) - FILESYSTEM SAFE (no colons)
             (r'\$\(date\s+\+%Y%m%d%H%M%S\)', now.strftime('%Y%m%d%H%M%S')),  # 20240115143025
             (r'`date\s+\+%Y%m%d%H%M%S`', now.strftime('%Y%m%d%H%M%S')),
             (r'\$\(date\s+\+%Y-%m-%d_%H-%M-%S\)', now.strftime('%Y-%m-%d_%H-%M-%S')),  # 2024-01-15_14-30-25
             (r'`date\s+\+%Y-%m-%d_%H-%M-%S`', now.strftime('%Y-%m-%d_%H-%M-%S')),
-            (r'\$\(date\s+\+%Y-%m-%d_%H:%M:%S\)', now.strftime('%Y-%m-%d_%H:%M:%S')),  # 2024-01-15_14:30:25
-            (r'`date\s+\+%Y-%m-%d_%H:%M:%S`', now.strftime('%Y-%m-%d_%H:%M:%S')),
             (r'\$\(date\s+\+%Y%m%d_%H%M%S\)', now.strftime('%Y%m%d_%H%M%S')),  # 20240115_143025
             (r'`date\s+\+%Y%m%d_%H%M%S`', now.strftime('%Y%m%d_%H%M%S')),
+            (r'\$\(date\s+\+%Y%m%d-%H%M%S\)', now.strftime('%Y%m%d-%H%M%S')),  # 20240115-143025
+            (r'`date\s+\+%Y%m%d-%H%M%S`', now.strftime('%Y%m%d-%H%M%S')),
             
-            # ISO 8601 formats
-            (r'\$\(date\s+\+%Y-%m-%dT%H:%M:%S\)', now.strftime('%Y-%m-%dT%H:%M:%S')),  # 2024-01-15T14:30:25
-            (r'`date\s+\+%Y-%m-%dT%H:%M:%S`', now.strftime('%Y-%m-%dT%H:%M:%S')),
-            (r'\$\(date\s+\+%Y-%m-%dT%H:%M:%SZ\)', now.strftime('%Y-%m-%dT%H:%M:%S') + 'Z'),  # 2024-01-15T14:30:25Z
-            (r'`date\s+\+%Y-%m-%dT%H:%M:%SZ`', now.strftime('%Y-%m-%dT%H:%M:%S') + 'Z'),
+            # ISO-like format but filesystem safe (T separator, no colons)
+            (r'\$\(date\s+\+%Y-%m-%dT%H%M%S\)', now.strftime('%Y-%m-%dT%H%M%S')),  # 2024-01-15T143025
+            (r'`date\s+\+%Y-%m-%dT%H%M%S`', now.strftime('%Y-%m-%dT%H%M%S')),
             
-            # Time only formats
-            (r'\$\(date\s+\+%H:%M:%S\)', now.strftime('%H:%M:%S')),  # 14:30:25
-            (r'`date\s+\+%H:%M:%S`', now.strftime('%H:%M:%S')),
+            # Time only formats - FILESYSTEM SAFE (dashes instead of colons)
+            (r'\$\(date\s+\+%H-%M-%S\)', now.strftime('%H-%M-%S')),  # 14-30-25
+            (r'`date\s+\+%H-%M-%S`', now.strftime('%H-%M-%S')),
             (r'\$\(date\s+\+%H%M%S\)', now.strftime('%H%M%S')),  # 143025
             (r'`date\s+\+%H%M%S`', now.strftime('%H%M%S')),
             (r'\$\(date\s+\+%H\)', now.strftime('%H')),  # 14
@@ -217,9 +216,13 @@ class ShellExtractor(BaseExtractor):
             (r'\$\(date\s+\+%S\)', now.strftime('%S')),  # 25
             (r'`date\s+\+%S`', now.strftime('%S')),
             
-            # Unix timestamp
+            # Unix timestamp (always filesystem safe)
             (r'\$\(date\s+\+%s\)', str(int(now.timestamp()))),  # 1705330225
             (r'`date\s+\+%s`', str(int(now.timestamp()))),
+            
+            # Milliseconds (sometimes used)
+            (r'\$\(date\s+\+%s%3N\)', str(int(now.timestamp() * 1000))),  # 1705330225123
+            (r'`date\s+\+%s%3N`', str(int(now.timestamp() * 1000))),
             
             # Default
             (r'\$\(date\)', now.strftime('%Y-%m-%d')),  # Default
@@ -236,7 +239,7 @@ class ShellExtractor(BaseExtractor):
         date_arithmetic_pattern = r'\$\(date\s+-d\s+[^)]+\+([^)]+)\)'
         def replace_date_arithmetic(match):
             format_spec = match.group(1)
-            # Map format to representative value
+            # Map format to representative value (filesystem-safe)
             if format_spec == '%Y-%m-%d':
                 return 'YYYY-MM-DD'
             elif format_spec == '%Y%m%d':
@@ -245,20 +248,20 @@ class ShellExtractor(BaseExtractor):
                 return 'YYYYMMDDHHMMSS'
             elif '%Y-%m-%d_%H-%M-%S' in format_spec:
                 return 'YYYY-MM-DD_HH-MM-SS'
-            elif '%Y-%m-%d_%H:%M:%S' in format_spec:
-                return 'YYYY-MM-DD_HH:MM:SS'
             elif '%Y%m%d_%H%M%S' in format_spec:
                 return 'YYYYMMDD_HHMMSS'
-            elif '%Y-%m-%dT%H:%M:%S' in format_spec:
-                return 'YYYY-MM-DDTHH:MM:SS'
+            elif '%Y%m%d-%H%M%S' in format_spec:
+                return 'YYYYMMDD-HHMMSS'
+            elif '%Y-%m-%dT%H%M%S' in format_spec:
+                return 'YYYY-MM-DDTHHMMSS'  # Filesystem-safe ISO-like
             elif format_spec == '%Y':
                 return 'YYYY'
             elif format_spec == '%m':
                 return 'MM'
             elif format_spec == '%d':
                 return 'DD'
-            elif format_spec == '%H:%M:%S':
-                return 'HH:MM:SS'
+            elif format_spec == '%H-%M-%S':
+                return 'HH-MM-SS'
             elif format_spec == '%H%M%S':
                 return 'HHMMSS'
             elif format_spec == '%s':
