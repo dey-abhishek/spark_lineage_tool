@@ -8,7 +8,7 @@ from sqlparse.sql import IdentifierList, Identifier, Where, Token
 from sqlparse.tokens import Keyword, DML
 
 from .base import BaseExtractor
-from lineage.ir import Fact, ReadFact, WriteFact, ExtractionMethod
+from lineage.ir import Fact, ReadFact, WriteFact, ConfigFact, ExtractionMethod
 from lineage.rules import RuleEngine
 
 
@@ -225,6 +225,9 @@ class HiveExtractor(BaseExtractor):
         # Remove comments
         content_no_comments = self._remove_comments(content)
         
+        # Extract variable definitions (SET hivevar:var=value, SET var=value)
+        facts.extend(self._extract_variable_definitions(content_no_comments, source_file))
+        
         # Split into statements (rough split on semicolons)
         statements = self._split_statements(content_no_comments)
         
@@ -290,6 +293,38 @@ class HiveExtractor(BaseExtractor):
                 fact = self._match_to_fact(match, source_file)
                 if fact:
                     facts.append(fact)
+        
+        return facts
+    
+    def _extract_variable_definitions(self, content: str, source_file: str) -> List[Fact]:
+        """Extract variable definitions from Hive SQL (SET hivevar:var=value, SET var=value)."""
+        facts = []
+        
+        # Pattern to match SET statements
+        # Matches: SET hivevar:VAR=value, SET VAR=value, SET VAR='value', SET hiveconf:var=value
+        set_patterns = [
+            re.compile(r'^\s*SET\s+hivevar:(\w+)\s*=\s*(["\']?)([^;"\'\n]+)\2', re.MULTILINE | re.IGNORECASE),
+            re.compile(r'^\s*SET\s+hiveconf:(\w+)\s*=\s*(["\']?)([^;"\'\n]+)\2', re.MULTILINE | re.IGNORECASE),
+            re.compile(r'^\s*SET\s+(\w+)\s*=\s*(["\']?)([^;"\'\n]+)\2', re.MULTILINE | re.IGNORECASE),
+        ]
+        
+        for pattern in set_patterns:
+            for match in pattern.finditer(content):
+                var_name = match.group(1)
+                value = match.group(3).strip()
+                line_number = content[:match.start()].count("\n") + 1
+                
+                # Create a ConfigFact for the variable definition
+                fact = ConfigFact(
+                    source_file=source_file,
+                    line_number=line_number,
+                    config_key=var_name,
+                    config_value=value,
+                    config_source="hive_set",
+                    extraction_method=ExtractionMethod.REGEX,
+                    confidence=0.90
+                )
+                facts.append(fact)
         
         return facts
     

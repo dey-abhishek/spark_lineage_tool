@@ -5,7 +5,7 @@ from typing import List, Optional
 import re
 
 from .base import BaseExtractor
-from lineage.ir import Fact, ReadFact, WriteFact, ExtractionMethod
+from lineage.ir import Fact, ReadFact, WriteFact, ConfigFact, ExtractionMethod
 from lineage.rules import RuleEngine
 
 
@@ -61,6 +61,9 @@ class ScalaExtractor(BaseExtractor):
         
         # Remove comments
         content_no_comments = self._remove_comments(content)
+        
+        # Extract variable definitions (val/var varName = "value")
+        facts.extend(self._extract_variable_definitions(content_no_comments, source_file))
         
         # Join lines for method chains (normalize whitespace around dots and newlines)
         content_joined = re.sub(r'\s*\n\s*\.', '.', content_no_comments)
@@ -200,6 +203,33 @@ class ScalaExtractor(BaseExtractor):
                 fact = self._match_to_fact(match, source_file)
                 if fact:
                     facts.append(fact)
+        
+        return facts
+    
+    def _extract_variable_definitions(self, content: str, source_file: str) -> List[Fact]:
+        """Extract variable definitions from Scala code (val/var name = "value")."""
+        facts = []
+        
+        # Pattern to match val/var assignments with string literals
+        # Matches: val sourceDb = "prod_db", var env = "prod"
+        var_pattern = re.compile(r'^\s*(?:val|var)\s+(\w+)\s*=\s*"([^"]+)"', re.MULTILINE)
+        
+        for match in var_pattern.finditer(content):
+            var_name = match.group(1)
+            value = match.group(2).strip()
+            line_number = content[:match.start()].count("\n") + 1
+            
+            # Create a ConfigFact for the variable definition
+            fact = ConfigFact(
+                source_file=source_file,
+                line_number=line_number,
+                config_key=var_name,
+                config_value=value,
+                config_source="scala_assignment",
+                extraction_method=ExtractionMethod.REGEX,
+                confidence=0.90
+            )
+            facts.append(fact)
         
         return facts
     

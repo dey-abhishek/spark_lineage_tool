@@ -7,7 +7,7 @@ import re
 import sqlparse
 
 from .base import BaseExtractor
-from lineage.ir import Fact, ReadFact, WriteFact, FactType, ExtractionMethod
+from lineage.ir import Fact, ReadFact, WriteFact, ConfigFact, FactType, ExtractionMethod
 from lineage.rules import RuleEngine
 
 
@@ -63,12 +63,30 @@ class PySparkASTVisitor(ast.NodeVisitor):
         self.generic_visit(node)
     
     def visit_Assign(self, node: ast.Assign) -> None:
-        """Visit assignment nodes to track variables."""
+        """Visit assignment nodes to track variables and extract string/config variables."""
         # Simple variable tracking
         for target in node.targets:
             if isinstance(target, ast.Name):
+                var_name = target.id
                 # Store basic info about the assignment
-                self.variables[target.id] = node.value
+                self.variables[var_name] = node.value
+                
+                # Extract string literal assignments as ConfigFacts
+                # This captures: source_db = "prod_db", env = "prod", etc.
+                if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                    line_number = node.lineno
+                    config_value = node.value.value
+                    
+                    fact = ConfigFact(
+                        source_file=self.source_file,
+                        line_number=line_number,
+                        config_key=var_name,
+                        config_value=config_value,
+                        config_source="python_assignment",
+                        extraction_method=ExtractionMethod.AST,
+                        confidence=0.95
+                    )
+                    self.facts.append(fact)
         
         self.generic_visit(node)
     
