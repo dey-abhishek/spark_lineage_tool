@@ -41,6 +41,13 @@ class ScalaExtractor(BaseExtractor):
             # JDBC patterns
             "jdbc_read": re.compile(r'\.read\.jdbc\([^,]+,\s*(?:s?)"([^"]+)"', re.DOTALL),
             "jdbc_write": re.compile(r'\.write\.jdbc\([^,]+,\s*(?:s?)"([^"]+)"', re.DOTALL),
+            # Kafka patterns - Spark structured streaming
+            "kafka_read_stream": re.compile(r'\.readStream\.format\("kafka"\).*?\.option\("subscribe",\s*"([^"]+)"\)', re.DOTALL),
+            "kafka_write_stream": re.compile(r'\.writeStream\.format\("kafka"\).*?\.option\("topic",\s*"([^"]+)"\)', re.DOTALL),
+            # Kafka patterns - Native Kafka producer/consumer
+            "kafka_producer_record": re.compile(r'new\s+ProducerRecord\[.*?\]\(\s*"([^"]+)"', re.DOTALL),
+            "kafka_consumer_subscribe": re.compile(r'\.subscribe\(.*?Collections\.singletonList\(\s*"([^"]+)"\)', re.DOTALL),
+            "kafka_consumer_subscribe_var": re.compile(r'\.subscribe\(.*?Collections\.singletonList\(\s*(\w+)\s*\)', re.DOTALL),
         }
     
     def extract(self, file_path: Path) -> List[Fact]:
@@ -194,6 +201,48 @@ class ScalaExtractor(BaseExtractor):
                             has_placeholders=has_placeholders
                         )
                         fact.params["dbtable"] = table
+                        facts.append(fact)
+        
+        # Extract Kafka operations
+        for pattern_name, pattern in self.patterns.items():
+            if pattern_name.startswith("kafka_"):
+                for match in pattern.finditer(content_joined):
+                    topic = match.group(1)
+                    line_number = content[:match.start()].count("\n") + 1
+                    
+                    has_placeholders = "$" in topic
+                    dataset_type = "kafka"
+                    urn = f"kafka://{topic}"
+                    
+                    if pattern_name in ["kafka_read_stream", "kafka_consumer_subscribe", "kafka_consumer_subscribe_var"]:
+                        # This is a READ from Kafka
+                        fact = ReadFact(
+                            source_file=source_file,
+                            line_number=line_number,
+                            dataset_urn=urn,
+                            dataset_type=dataset_type,
+                            confidence=0.85 if not has_placeholders else 0.75,
+                            extraction_method=ExtractionMethod.REGEX,
+                            evidence=match.group(0)[:100],
+                            has_placeholders=has_placeholders
+                        )
+                        fact.params["kafka_topic"] = topic
+                        fact.params["streaming"] = True if "stream" in pattern_name else False
+                        facts.append(fact)
+                    elif pattern_name in ["kafka_write_stream", "kafka_producer_record"]:
+                        # This is a WRITE to Kafka
+                        fact = WriteFact(
+                            source_file=source_file,
+                            line_number=line_number,
+                            dataset_urn=urn,
+                            dataset_type=dataset_type,
+                            confidence=0.85 if not has_placeholders else 0.75,
+                            extraction_method=ExtractionMethod.REGEX,
+                            evidence=match.group(0)[:100],
+                            has_placeholders=has_placeholders
+                        )
+                        fact.params["kafka_topic"] = topic
+                        fact.params["streaming"] = True if "stream" in pattern_name else False
                         facts.append(fact)
         
         # Use rule engine for additional patterns

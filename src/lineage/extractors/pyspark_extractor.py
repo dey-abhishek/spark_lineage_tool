@@ -449,6 +449,27 @@ class PySparkASTVisitor(ast.NodeVisitor):
         
         path = self._extract_string_arg(node)
         
+        # Special handling for Kafka: extract topic from .option("subscribe", "topic")
+        kafka_topic = None
+        dataset_type_override = None
+        if format_type and format_type.lower() == "kafka":
+            # Try to extract Kafka topic from subscribe option
+            kafka_topic = self._extract_option_value(node, "subscribe")
+            if not kafka_topic:
+                # Try topics option (comma-separated list)
+                kafka_topic = self._extract_option_value(node, "topics")
+            if not kafka_topic:
+                # Try topic option (single topic)
+                kafka_topic = self._extract_option_value(node, "topic")
+            
+            if kafka_topic:
+                path = f"kafka://{kafka_topic}"
+                dataset_type_override = "kafka"
+            else:
+                # Generic Kafka source without specific topic
+                path = "kafka://unknown_topic"
+                dataset_type_override = "kafka"
+        
         # For streaming sources like Kafka, format is the key info
         if format_type and not path:
             path = f"stream:{format_type}"
@@ -460,12 +481,20 @@ class PySparkASTVisitor(ast.NodeVisitor):
         else:
             return None
         
+        # Determine dataset type
+        if dataset_type_override:
+            dataset_type = dataset_type_override
+        elif "readStream" in chain:
+            dataset_type = "stream"
+        else:
+            dataset_type = "hdfs"
+        
         fact = ReadFact(
             source_file=self.source_file,
             line_number=node.lineno,
             dataset_urn=path if path else f"stream:{format_type}",
-            dataset_type="stream" if "readStream" in chain else "hdfs",
-            confidence=0.85,
+            dataset_type=dataset_type,
+            confidence=0.85 if kafka_topic else 0.75,  # Lower confidence if topic not extracted
             extraction_method=ExtractionMethod.AST,
             evidence=f"spark.{'readStream' if 'readStream' in chain else 'read'}.{f'format({format_type}).' if format_type else ''}{chain[-1]}({evidence_path})",
             has_placeholders="${" in path if path else False
@@ -487,6 +516,10 @@ class PySparkASTVisitor(ast.NodeVisitor):
         if "readStream" in chain:
             fact.params["streaming"] = True
         
+        # Store Kafka topic if found
+        if kafka_topic:
+            fact.params["kafka_topic"] = kafka_topic
+        
         return fact
     
     def _extract_write_fact(self, node: ast.Call, chain: List[str]) -> Optional[Fact]:
@@ -497,6 +530,24 @@ class PySparkASTVisitor(ast.NodeVisitor):
         # Try to extract path from arguments or options
         path = self._extract_string_arg(node)
         
+        # Special handling for Kafka: extract topic from .option("topic", "topic_name")
+        kafka_topic = None
+        dataset_type_override = None
+        if format_type and format_type.lower() == "kafka":
+            # Try to extract Kafka topic
+            kafka_topic = self._extract_option_value(node, "topic")
+            if not kafka_topic:
+                # Try topics option
+                kafka_topic = self._extract_option_value(node, "topics")
+            
+            if kafka_topic:
+                path = f"kafka://{kafka_topic}"
+                dataset_type_override = "kafka"
+            else:
+                # Generic Kafka sink without specific topic
+                path = "kafka://unknown_topic"
+                dataset_type_override = "kafka"
+        
         # For writeStream, check for path in .option("path", "...")
         if not path and "writeStream" in chain:
             path = self._extract_option_value(node, "path")
@@ -504,12 +555,20 @@ class PySparkASTVisitor(ast.NodeVisitor):
         if not path:
             return None
         
+        # Determine dataset type
+        if dataset_type_override:
+            dataset_type = dataset_type_override
+        elif "writeStream" in chain:
+            dataset_type = "stream"
+        else:
+            dataset_type = "hdfs"
+        
         fact = WriteFact(
             source_file=self.source_file,
             line_number=node.lineno,
             dataset_urn=path,
-            dataset_type="stream" if "writeStream" in chain else "hdfs",
-            confidence=0.85,
+            dataset_type=dataset_type,
+            confidence=0.85 if kafka_topic else 0.75,  # Lower confidence if topic not extracted
             extraction_method=ExtractionMethod.AST,
             evidence=f"df.{'writeStream' if 'writeStream' in chain else 'write'}.{chain[-1]}({path})",
             has_placeholders="${" in path
@@ -546,6 +605,10 @@ class PySparkASTVisitor(ast.NodeVisitor):
                 )
                 checkpoint_fact.params["is_checkpoint"] = True
                 self.facts.append(checkpoint_fact)
+        
+        # Store Kafka topic if found
+        if kafka_topic:
+            fact.params["kafka_topic"] = kafka_topic
         
         # Check for mode
         for keyword in node.keywords:
