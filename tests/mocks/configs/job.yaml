@@ -1,0 +1,24 @@
+# Job configuration
+job_name: DataProcessingJob
+run_date: ${RUN_DATE}
+
+sources:
+  - name: transactions
+    format: parquet
+    path: /data/raw/transactions/${run_date}
+  - name: users
+    format: parquet
+    path: /data/raw/users
+
+outputs:
+  - format: parquet
+    path: /data/processed/enriched/${run_date}
+    mode: overwrite
+
+query: |
+  SELECT 
+    t.*, 
+    u.user_name 
+  FROM transactions t 
+  JOIN users u ON t.user_id = u.user_id
+

@@ -1,0 +1,321 @@
+"""Shell script tokenizer and extractor."""
+
+from pathlib import Path
+from typing import List, Optional, Dict, Any
+import re
+import shlex
+
+from .base import BaseExtractor
+from lineage.ir import Fact, ReadFact, WriteFact, JobDependencyFact, ExtractionMethod
+from lineage.rules import RuleEngine
+
+
+class ShellExtractor(BaseExtractor):
+    """Extractor for shell scripts."""
+    
+    def __init__(self, rule_engine: Optional[RuleEngine] = None) -> None:
+        super().__init__()
+        self.rule_engine = rule_engine
+        
+        # Shell command patterns
+        self.patterns = {
+            "hdfs_get": re.compile(r'hdfs\s+dfs\s+-get\s+(\S+)\s+(\S+)'),
+            "hdfs_put": re.compile(r'hdfs\s+dfs\s+-put\s+(\S+)\s+(\S+)'),
+            "hdfs_cp": re.compile(r'hdfs\s+dfs\s+-cp\s+(\S+)\s+(\S+)'),
+            "hdfs_mv": re.compile(r'hdfs\s+dfs\s+-mv\s+(\S+)\s+(\S+)'),
+            "hdfs_cat": re.compile(r'hdfs\s+dfs\s+-cat\s+(\S+)'),
+            "hdfs_text": re.compile(r'hdfs\s+dfs\s+-text\s+(\S+)'),
+            "distcp": re.compile(r'hadoop\s+distcp\s+.*?(\S+)\s+(\S+)'),
+            "spark_submit": re.compile(r'spark-submit\s+.*?(\S+\.(?:py|jar|scala))'),
+            "hive_execute": re.compile(r'hive\s+-e\s+["\']([^"\']+)["\']'),
+            "hive_file": re.compile(r'hive\s+-f\s+(\S+)'),
+            "beeline_execute": re.compile(r'beeline\s+-e\s+["\']([^"\']+)["\']'),
+            "beeline_file": re.compile(r'beeline\s+-f\s+(\S+)'),
+        }
+    
+    def extract(self, file_path: Path) -> List[Fact]:
+        """Extract facts from shell script."""
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            
+            return self.extract_from_content(content, str(file_path))
+        
+        except Exception as e:
+            print(f"Error extracting from {file_path}: {e}")
+            return []
+    
+    def extract_from_content(self, content: str, source_file: str) -> List[Fact]:
+        """Extract facts from shell script content."""
+        facts = []
+        
+        # Remove comments
+        content_no_comments = self._remove_comments(content)
+        
+        # Extract HDFS operations
+        facts.extend(self._extract_hdfs_ops(content_no_comments, source_file))
+        
+        # Extract job invocations
+        facts.extend(self._extract_job_invocations(content_no_comments, source_file))
+        
+        # Use rule engine for additional patterns
+        if self.rule_engine:
+            matches = self.rule_engine.apply_rules(content_no_comments, "shell")
+            for match in matches:
+                fact = self._match_to_fact(match, source_file)
+                if fact:
+                    facts.append(fact)
+        
+        return facts
+    
+    def _remove_comments(self, content: str) -> str:
+        """Remove shell comments."""
+        lines = []
+        for line in content.split("\n"):
+            # Remove inline comments (but preserve # in strings)
+            if "#" in line:
+                # Simple heuristic: if # is not in quotes, treat as comment
+                comment_pos = line.find("#")
+                before_comment = line[:comment_pos]
+                # Count quotes before comment
+                single_quotes = before_comment.count("'")
+                double_quotes = before_comment.count('"')
+                # If even number of quotes, # starts a comment
+                if single_quotes % 2 == 0 and double_quotes % 2 == 0:
+                    line = line[:comment_pos]
+            lines.append(line)
+        return "\n".join(lines)
+    
+    def _extract_hdfs_ops(self, content: str, source_file: str) -> List[Fact]:
+        """Extract HDFS operations."""
+        facts = []
+        
+        # hdfs dfs -get (read)
+        for match in self.patterns["hdfs_get"].finditer(content):
+            source_path = match.group(1)
+            line_number = content[:match.start()].count("\n") + 1
+            
+            fact = ReadFact(
+                source_file=source_file,
+                line_number=line_number,
+                dataset_urn=source_path,
+                dataset_type="hdfs",
+                confidence=0.70,
+                extraction_method=ExtractionMethod.REGEX,
+                evidence=match.group(0),
+                has_placeholders="$" in source_path
+            )
+            facts.append(fact)
+        
+        # hdfs dfs -put (write)
+        for match in self.patterns["hdfs_put"].finditer(content):
+            target_path = match.group(2)
+            line_number = content[:match.start()].count("\n") + 1
+            
+            fact = WriteFact(
+                source_file=source_file,
+                line_number=line_number,
+                dataset_urn=target_path,
+                dataset_type="hdfs",
+                confidence=0.70,
+                extraction_method=ExtractionMethod.REGEX,
+                evidence=match.group(0),
+                has_placeholders="$" in target_path
+            )
+            facts.append(fact)
+        
+        # hdfs dfs -cp (read + write)
+        for match in self.patterns["hdfs_cp"].finditer(content):
+            source_path = match.group(1)
+            target_path = match.group(2)
+            line_number = content[:match.start()].count("\n") + 1
+            
+            # Read from source
+            read_fact = ReadFact(
+                source_file=source_file,
+                line_number=line_number,
+                dataset_urn=source_path,
+                dataset_type="hdfs",
+                confidence=0.70,
+                extraction_method=ExtractionMethod.REGEX,
+                evidence=match.group(0),
+                has_placeholders="$" in source_path
+            )
+            facts.append(read_fact)
+            
+            # Write to target
+            write_fact = WriteFact(
+                source_file=source_file,
+                line_number=line_number,
+                dataset_urn=target_path,
+                dataset_type="hdfs",
+                confidence=0.70,
+                extraction_method=ExtractionMethod.REGEX,
+                evidence=match.group(0),
+                has_placeholders="$" in target_path
+            )
+            facts.append(write_fact)
+        
+        # hdfs dfs -mv (read + write, delete source)
+        for match in self.patterns["hdfs_mv"].finditer(content):
+            source_path = match.group(1)
+            target_path = match.group(2)
+            line_number = content[:match.start()].count("\n") + 1
+            
+            read_fact = ReadFact(
+                source_file=source_file,
+                line_number=line_number,
+                dataset_urn=source_path,
+                dataset_type="hdfs",
+                confidence=0.70,
+                extraction_method=ExtractionMethod.REGEX,
+                evidence=match.group(0),
+                has_placeholders="$" in source_path
+            )
+            facts.append(read_fact)
+            
+            write_fact = WriteFact(
+                source_file=source_file,
+                line_number=line_number,
+                dataset_urn=target_path,
+                dataset_type="hdfs",
+                confidence=0.70,
+                extraction_method=ExtractionMethod.REGEX,
+                evidence=match.group(0),
+                has_placeholders="$" in target_path
+            )
+            facts.append(write_fact)
+        
+        # distcp
+        for match in self.patterns["distcp"].finditer(content):
+            source_path = match.group(1)
+            target_path = match.group(2)
+            line_number = content[:match.start()].count("\n") + 1
+            
+            read_fact = ReadFact(
+                source_file=source_file,
+                line_number=line_number,
+                dataset_urn=source_path,
+                dataset_type="hdfs",
+                confidence=0.75,
+                extraction_method=ExtractionMethod.REGEX,
+                evidence=match.group(0),
+                has_placeholders="$" in source_path
+            )
+            facts.append(read_fact)
+            
+            write_fact = WriteFact(
+                source_file=source_file,
+                line_number=line_number,
+                dataset_urn=target_path,
+                dataset_type="hdfs",
+                confidence=0.75,
+                extraction_method=ExtractionMethod.REGEX,
+                evidence=match.group(0),
+                has_placeholders="$" in target_path
+            )
+            facts.append(write_fact)
+        
+        return facts
+    
+    def _extract_job_invocations(self, content: str, source_file: str) -> List[Fact]:
+        """Extract job invocations (spark-submit, hive, etc.)."""
+        facts = []
+        
+        # spark-submit
+        for match in self.patterns["spark_submit"].finditer(content):
+            script = match.group(1)
+            line_number = content[:match.start()].count("\n") + 1
+            
+            fact = JobDependencyFact(
+                source_file=source_file,
+                line_number=line_number,
+                confidence=0.80,
+                extraction_method=ExtractionMethod.REGEX,
+                evidence=match.group(0),
+                dependency_job=script,
+                dependency_type="spark-submit"
+            )
+            facts.append(fact)
+        
+        # hive -e
+        for match in self.patterns["hive_execute"].finditer(content):
+            sql = match.group(1)
+            line_number = content[:match.start()].count("\n") + 1
+            
+            fact = JobDependencyFact(
+                source_file=source_file,
+                line_number=line_number,
+                confidence=0.75,
+                extraction_method=ExtractionMethod.REGEX,
+                evidence=match.group(0)[:100],
+                dependency_type="hive-execute"
+            )
+            fact.params["sql"] = sql
+            facts.append(fact)
+        
+        # hive -f
+        for match in self.patterns["hive_file"].finditer(content):
+            sql_file = match.group(1)
+            line_number = content[:match.start()].count("\n") + 1
+            
+            fact = JobDependencyFact(
+                source_file=source_file,
+                line_number=line_number,
+                confidence=0.80,
+                extraction_method=ExtractionMethod.REGEX,
+                evidence=match.group(0),
+                dependency_job=sql_file,
+                dependency_type="hive-file"
+            )
+            facts.append(fact)
+        
+        return facts
+    
+    def _match_to_fact(self, match: dict, source_file: str) -> Optional[Fact]:
+        """Convert rule match to fact."""
+        from lineage.rules import RuleAction
+        
+        action = match["action"]
+        
+        if action == RuleAction.READ_HDFS_PATH:
+            path = match["groups"].get("source", match["groups"].get("path", ""))
+            return ReadFact(
+                source_file=source_file,
+                dataset_urn=path,
+                dataset_type="hdfs",
+                confidence=match["confidence"],
+                extraction_method=ExtractionMethod.REGEX,
+                evidence=match["match_text"],
+                has_placeholders="$" in path
+            )
+        
+        elif action == RuleAction.WRITE_HDFS_PATH:
+            path = match["groups"].get("target", match["groups"].get("path", ""))
+            return WriteFact(
+                source_file=source_file,
+                dataset_urn=path,
+                dataset_type="hdfs",
+                confidence=match["confidence"],
+                extraction_method=ExtractionMethod.REGEX,
+                evidence=match["match_text"],
+                has_placeholders="$" in path
+            )
+        
+        elif action == RuleAction.JOB_INVOCATION:
+            script = match["groups"].get("script", match["groups"].get("file", ""))
+            fact = JobDependencyFact(
+                source_file=source_file,
+                confidence=match["confidence"],
+                extraction_method=ExtractionMethod.REGEX,
+                evidence=match["match_text"],
+                dependency_job=script
+            )
+            return fact
+        
+        return None
+    
+    def get_confidence_base(self) -> float:
+        """Get base confidence for shell extraction."""
+        return 0.70
+

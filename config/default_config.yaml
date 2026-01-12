@@ -1,0 +1,87 @@
+# Default Lineage Tool Configuration
+
+# Repository and output paths
+repo_path: null  # Will be set via CLI
+config_dir: null  # Optional path to additional config files
+output_dir: "output"
+
+# Patterns to ignore during scanning
+ignore_patterns:
+  paths:
+    - "/tmp/**"
+    - "**/_SUCCESS"
+    - "**/_logs/**"
+    - "**/_metadata/**"
+    - "**/checkpoints/**"
+    - "**/_temporary/**"
+    - "**/spark-warehouse/**"
+    - "**/.git/**"
+    - "**/target/**"
+    - "**/build/**"
+  extensions:
+    - ".tmp"
+    - ".swp"
+    - ".bak"
+
+# Environment configurations
+environments:
+  default:
+    name: "default"
+    hdfs_namenode: "hdfs://namenode:8020"
+    hive_metastore_uri: null
+    base_dirs:
+      raw: "/data/raw"
+      processed: "/data/processed"
+      warehouse: "/warehouse/tablespace"
+  
+  production:
+    name: "production"
+    hdfs_namenode: "hdfs://prod-namenode:8020"
+    hive_metastore_uri: "thrift://hive-metastore:9083"
+    base_dirs:
+      raw: "/prod/data/raw"
+      processed: "/prod/data/processed"
+      warehouse: "/prod/warehouse/tablespace"
+
+active_environment: "default"
+
+# Hive Metastore integration
+hive_metastore:
+  enabled: false
+  jdbc_uri: null  # e.g., "jdbc:hive2://localhost:10000/default"
+  username: null
+  password: null
+  database: "default"
+
+# Database export configuration
+database:
+  enabled: false
+  driver: "postgresql"  # postgresql, mysql, sqlite
+  host: "localhost"
+  port: 5432
+  database: "lineage"
+  username: null
+  password: null
+  schema: "lineage"
+
+# Export options
+export:
+  json: true
+  csv: true
+  database: false
+  html: true
+
+# Performance settings
+performance:
+  parallel_workers: 4
+  enable_caching: true
+  cache_dir: ".lineage_cache"
+  incremental: true
+
+# Rule files to load (in addition to defaults)
+rule_files:
+  - "config/rules/custom_rules.yaml"
+
+# Custom extractor plugins (Python module paths)
+custom_extractors: {}
+
