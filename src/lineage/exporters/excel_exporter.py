@@ -46,8 +46,8 @@ class ExcelExporter:
         if any(pattern in name or pattern in urn for pattern in temp_patterns):
             return True
         
-        # Skip very generic names
-        generic_names = ['data', 'tmp', 'temp', 'staging', 'output', 'input', '-update']
+        # Skip very generic names ONLY if they don't have meaningful URNs
+        generic_names = ['data', 'tmp', 'temp', 'staging', '-update']
         if name in generic_names:
             return True
         
