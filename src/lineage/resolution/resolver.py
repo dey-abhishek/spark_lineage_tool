@@ -57,6 +57,9 @@ class VariableResolver:
         # First, handle shell parameter expansion with defaults: ${var:-default}
         result = self._resolve_parameter_defaults(result)
         
+        # Handle Hive-specific variable syntax: ${hiveconf:var}, ${hivevar:var}
+        result = self._resolve_hive_variables(result)
+        
         for pattern in self.patterns:
             def replace_fn(match: re.Match) -> str:
                 var_name = match.group(1)
@@ -95,6 +98,40 @@ class VariableResolver:
             return default_value
         
         return param_default_pattern.sub(replace_with_default, text)
+    
+    def _resolve_hive_variables(self, text: str) -> str:
+        """Resolve Hive-specific variable syntax: ${hiveconf:var}, ${hivevar:var}
+        
+        Hive allows these formats:
+            ${hiveconf:var_name} - Configuration variables
+            ${hivevar:var_name}  - User-defined variables
+            ${system:var_name}   - System properties
+            ${env:var_name}      - Environment variables
+        
+        We strip the prefix and try to resolve the variable name.
+        """
+        # Pattern: ${hiveconf:var}, ${hivevar:var}, etc.
+        hive_var_pattern = re.compile(r'\$\{(hiveconf|hivevar|system|env):([^}]+)\}', re.IGNORECASE)
+        
+        def resolve_hive_var(match: re.Match) -> str:
+            prefix = match.group(1).lower()
+            var_name = match.group(2)
+            
+            # Try to resolve the variable name directly
+            value = self.symbol_table.resolve(var_name)
+            if value is not None:
+                return value
+            
+            # Try with the prefix (some configs might store it as "HIVECONF:var")
+            prefixed_name = f"{prefix.upper()}:{var_name}"
+            value = self.symbol_table.resolve(prefixed_name)
+            if value is not None:
+                return value
+            
+            # Keep original if not resolved
+            return match.group(0)
+        
+        return hive_var_pattern.sub(resolve_hive_var, text)
     
     def _has_variables(self, text: str) -> bool:
         """Check if text contains unresolved variables."""

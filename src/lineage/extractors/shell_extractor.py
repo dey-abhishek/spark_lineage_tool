@@ -25,7 +25,7 @@ class ShellExtractor(BaseExtractor):
             "hdfs_mv": re.compile(r'hdfs\s+dfs\s+-mv\s+(\S+)\s+(\S+)'),
             "hdfs_cat": re.compile(r'hdfs\s+dfs\s+-cat\s+(\S+)'),
             "hdfs_text": re.compile(r'hdfs\s+dfs\s+-text\s+(\S+)'),
-            "distcp": re.compile(r'hadoop\s+distcp\s+.*?(\S+)\s+(\S+)'),
+            "distcp": re.compile(r'hadoop\s+distcp\s+(?:(?:-\w+\s+)+)?(\S+)\s+(\S+)'),
             "spark_submit": re.compile(r'spark-submit\s+.*?(\S+\.(?:py|jar|scala))'),
             "hive_execute": re.compile(r'hive\s+-e\s+["\']([^"\']+)["\']'),
             "hive_file": re.compile(r'hive\s+-f\s+(\S+)'),
@@ -119,12 +119,21 @@ class ShellExtractor(BaseExtractor):
         facts = []
         
         # Pattern to match export statements and variable assignments
-        # Matches: export VAR=value, VAR=value, VAR="value", VAR='value', VAR=${OTHER}
-        export_pattern = re.compile(r'^(?:export\s+)?(\w+)=(["\']?)([^"\'\n]+)\2', re.MULTILINE)
+        # Matches: export VAR=value, VAR=value, VAR="value", VAR='value', VAR=${OTHER}, VAR=$(cmd)
+        # Handle quotes carefully - match either quoted strings or unquoted values
+        # For quoted: match everything until the closing quote
+        # For unquoted: match until newline or comment
+        export_pattern = re.compile(
+            r'^(?:export\s+)?(\w+)=((["\'])(.+?)\3|([^#\n]+?)(?:\s*#|$))',
+            re.MULTILINE
+        )
         
         for match in export_pattern.finditer(content):
             var_name = match.group(1)
-            value = match.group(3).strip()
+            # Group 2 is the full value (either quoted or unquoted)
+            # Group 4 is quoted content (if quoted)
+            # Group 5 is unquoted content (if not quoted)
+            value = (match.group(4) or match.group(5) or '').strip()
             line_number = content[:match.start()].count("\n") + 1
             
             # Try to resolve date expressions like $(date +%Y-%m-%d) or `date +%Y-%m-%d`
@@ -185,6 +194,27 @@ class ShellExtractor(BaseExtractor):
         result = value
         for pattern, replacement in date_patterns:
             result = re.sub(pattern, replacement, result)
+        
+        # Handle $(date -d "..." +format) - date arithmetic
+        # Examples: $(date -d "${RUN_DATE} -30 days" +%Y-%m-%d)
+        # For static analysis, we use a placeholder since we can't calculate relative dates
+        date_arithmetic_pattern = r'\$\(date\s+-d\s+[^)]+\+([^)]+)\)'
+        def replace_date_arithmetic(match):
+            format_spec = match.group(1)
+            # Map format to representative value
+            if format_spec == '%Y-%m-%d':
+                return 'YYYY-MM-DD'
+            elif format_spec == '%Y%m%d':
+                return 'YYYYMMDD'
+            elif format_spec == '%Y':
+                return 'YYYY'
+            elif format_spec == '%m':
+                return 'MM'
+            elif format_spec == '%d':
+                return 'DD'
+            else:
+                return f'DATE_{format_spec.replace("%", "")}'
+        result = re.sub(date_arithmetic_pattern, replace_date_arithmetic, result)
         
         # Handle ${1:-$(date ...)} pattern - parameter with date default
         # Extract the date part and resolve it

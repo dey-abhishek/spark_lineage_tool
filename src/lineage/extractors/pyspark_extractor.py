@@ -121,6 +121,21 @@ class PySparkASTVisitor(ast.NodeVisitor):
                             confidence=0.80
                         )
                         self.facts.append(fact)
+                
+                # Handle os.getenv() with defaults: input_db = os.getenv("INPUT_DATABASE", "prod")
+                elif isinstance(node.value, ast.Call):
+                    getenv_default = self._extract_getenv_default(node.value)
+                    if getenv_default:
+                        fact = ConfigFact(
+                            source_file=self.source_file,
+                            line_number=node.lineno,
+                            config_key=var_name,
+                            config_value=getenv_default,
+                            config_source="os_getenv_default",
+                            extraction_method=ExtractionMethod.AST,
+                            confidence=0.85
+                        )
+                        self.facts.append(fact)
         
         self.generic_visit(node)
     
@@ -230,6 +245,27 @@ class PySparkASTVisitor(ast.NodeVisitor):
         # The orelse branch contains the default value
         if isinstance(node.orelse, ast.Constant):
             return str(node.orelse.value)
+        return None
+    
+    def _extract_getenv_default(self, node: ast.Call) -> Optional[str]:
+        """Extract default value from os.getenv() call: os.getenv('VAR', 'default')
+        
+        Handles:
+            os.getenv("INPUT_DATABASE", "prod")
+            os.environ.get("INPUT_DATABASE", "prod")
+        """
+        # Check if it's os.getenv() or os.environ.get()
+        call_chain = self._extract_call_chain(node)
+        
+        # os.getenv() or os.environ.get()
+        if (call_chain == ['os', 'getenv'] or 
+            call_chain == ['os', 'environ', 'get']):
+            # Check if there's a default value (2nd argument)
+            if len(node.args) >= 2:
+                default_arg = node.args[1]
+                if isinstance(default_arg, ast.Constant):
+                    return str(default_arg.value)
+        
         return None
     
     def _extract_call_chain(self, node: ast.Call) -> List[str]:

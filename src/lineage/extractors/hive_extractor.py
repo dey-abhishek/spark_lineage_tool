@@ -120,22 +120,29 @@ class HiveSQLParser:
     def _parse_create(self, statement: sqlparse.sql.Statement) -> None:
         """Parse CREATE statement."""
         sql = statement.value.upper()
+        sql_original = statement.value  # Keep original for extracting identifiers
         
         # CREATE TABLE
         create_table_match = re.search(
             r"CREATE\s+(?:EXTERNAL\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s(]+)",
-            sql
+            sql, re.IGNORECASE
         )
         if create_table_match:
-            table_name = self._clean_identifier(create_table_match.group(1))
-            self.write_tables.add(table_name)
+            # Extract from original SQL to preserve case and variables
+            create_table_match_original = re.search(
+                r"CREATE\s+(?:EXTERNAL\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s(]+)",
+                sql_original, re.IGNORECASE
+            )
+            if create_table_match_original:
+                table_name = self._clean_identifier(create_table_match_original.group(1))
+                self.write_tables.add(table_name)
         
         # CREATE TABLE AS SELECT
         if "AS SELECT" in sql or re.search(r"AS\s+SELECT", sql):
             self._parse_select(statement)
         
-        # LOCATION clause
-        location_match = re.search(r"LOCATION\s+['\"]([^'\"]+)['\"]", sql)
+        # LOCATION clause (extract from original to preserve variable case)
+        location_match = re.search(r"LOCATION\s+['\"]([^'\"]+)['\"]", sql_original, re.IGNORECASE)
         if location_match:
             self.paths.add(location_match.group(1))
     
@@ -156,28 +163,28 @@ class HiveSQLParser:
         """Fallback regex-based parsing."""
         sql_upper = sql.upper()
         
-        # LOAD DATA INPATH
+        # LOAD DATA INPATH (extract from original SQL to preserve case)
         load_match = re.search(
             r"LOAD\s+DATA\s+(?:LOCAL\s+)?INPATH\s+['\"]([^'\"]+)['\"]\s+INTO\s+TABLE\s+([^\s;]+)",
-            sql_upper
+            sql, re.IGNORECASE
         )
         if load_match:
             self.paths.add(load_match.group(1))
             self.write_tables.add(self._clean_identifier(load_match.group(2)))
         
-        # ALTER TABLE SET LOCATION
+        # ALTER TABLE SET LOCATION (extract from original SQL)
         alter_match = re.search(
             r"ALTER\s+TABLE\s+([^\s]+)\s+SET\s+LOCATION\s+['\"]([^'\"]+)['\"]",
-            sql_upper
+            sql, re.IGNORECASE
         )
         if alter_match:
             self.write_tables.add(self._clean_identifier(alter_match.group(1)))
             self.paths.add(alter_match.group(2))
         
-        # CREATE VIEW
+        # CREATE VIEW (extract from original SQL)
         view_match = re.search(
             r"CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\s+([^\s(]+)",
-            sql_upper
+            sql, re.IGNORECASE
         )
         if view_match:
             self.write_tables.add(self._clean_identifier(view_match.group(1)))
