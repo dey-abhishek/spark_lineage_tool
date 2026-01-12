@@ -6,7 +6,7 @@ import re
 import shlex
 
 from .base import BaseExtractor
-from lineage.ir import Fact, ReadFact, WriteFact, JobDependencyFact, ExtractionMethod
+from lineage.ir import Fact, ReadFact, WriteFact, JobDependencyFact, ConfigFact, ExtractionMethod
 from lineage.rules import RuleEngine
 
 
@@ -54,6 +54,9 @@ class ShellExtractor(BaseExtractor):
         
         # Join lines with backslash continuation
         content_joined = self._join_continued_lines(content_no_comments)
+        
+        # Extract variable definitions (export VAR=value)
+        facts.extend(self._extract_variable_definitions(content_joined, source_file))
         
         # Extract HDFS operations
         facts.extend(self._extract_hdfs_ops(content_joined, source_file))
@@ -110,6 +113,33 @@ class ShellExtractor(BaseExtractor):
                     line = line[:comment_pos]
             lines.append(line)
         return "\n".join(lines)
+    
+    def _extract_variable_definitions(self, content: str, source_file: str) -> List[Fact]:
+        """Extract variable definitions from shell script (export VAR=value, VAR=value)."""
+        facts = []
+        
+        # Pattern to match export statements and variable assignments
+        # Matches: export VAR=value, VAR=value, VAR="value", VAR='value', VAR=${OTHER}
+        export_pattern = re.compile(r'^(?:export\s+)?(\w+)=(["\']?)([^"\'\n]+)\2', re.MULTILINE)
+        
+        for match in export_pattern.finditer(content):
+            var_name = match.group(1)
+            value = match.group(3).strip()
+            line_number = content[:match.start()].count("\n") + 1
+            
+            # Create a ConfigFact for the variable definition
+            fact = ConfigFact(
+                source_file=source_file,
+                line_number=line_number,
+                config_key=var_name,
+                config_value=value,
+                config_source="shell_export",
+                extraction_method=ExtractionMethod.REGEX,
+                confidence=0.85
+            )
+            facts.append(fact)
+        
+        return facts
     
     def _extract_hdfs_ops(self, content: str, source_file: str) -> List[Fact]:
         """Extract HDFS operations."""
