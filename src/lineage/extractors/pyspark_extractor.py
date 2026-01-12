@@ -419,7 +419,14 @@ class PySparkASTVisitor(ast.NodeVisitor):
         return None
     
     def _extract_option_value(self, node: ast.Call, option_name: str) -> Optional[str]:
-        """Extract value from .option(name, value) calls in chain."""
+        """Extract value from .option(name, value) calls in chain.
+        
+        Handles:
+        - Literal strings: .option("topic", "my_topic")
+        - F-strings: .option("topic", f"topic_{env}")
+        - String concatenation: .option("topic", "topic_" + env)
+        - Variables: .option("topic", topic_var)
+        """
         current = node
         
         while current:
@@ -429,8 +436,11 @@ class PySparkASTVisitor(ast.NodeVisitor):
                     if len(current.args) >= 2:
                         # Check if first arg matches option_name
                         if isinstance(current.args[0], ast.Constant) and current.args[0].value == option_name:
-                            if isinstance(current.args[1], ast.Constant) and isinstance(current.args[1].value, str):
-                                return current.args[1].value
+                            # Extract value from second argument (multiple types supported)
+                            value_node = current.args[1]
+                            extracted_value = self._extract_string_expression(value_node)
+                            if extracted_value:
+                                return extracted_value
                 
                 # Move up the chain
                 if isinstance(current.func, ast.Attribute):
@@ -439,6 +449,93 @@ class PySparkASTVisitor(ast.NodeVisitor):
                     break
             else:
                 break
+        
+        return None
+    
+    def _extract_string_expression(self, node: ast.AST) -> Optional[str]:
+        """Extract string value from various AST node types.
+        
+        Supports:
+        - Literal strings: "topic"
+        - F-strings: f"topic_{env}" → "topic_{env}"
+        - Binary ops: "topic_" + env → "topic_{env}"
+        - Variables: topic_var → "{topic_var}"
+        """
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            # Simple string literal
+            return node.value
+        
+        elif isinstance(node, ast.JoinedStr):
+            # F-string: f"topic_{env}" or f"topic_{config.env}"
+            parts = []
+            for value in node.values:
+                if isinstance(value, ast.Constant):
+                    parts.append(str(value.value))
+                elif isinstance(value, ast.FormattedValue):
+                    # Extract the variable/expression inside {}
+                    var_expr = self._extract_variable_reference(value.value)
+                    if var_expr:
+                        parts.append(f"{{{var_expr}}}")
+                    else:
+                        parts.append("{unknown}")
+            return ''.join(parts) if parts else None
+        
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            # String concatenation: "topic_" + env
+            left = self._extract_string_expression(node.left)
+            right = self._extract_string_expression(node.right)
+            if left and right:
+                return left + right
+            elif left:
+                return left
+            elif right:
+                return right
+        
+        elif isinstance(node, ast.Name):
+            # Variable reference: topic_var
+            return f"{{{node.id}}}"
+        
+        elif isinstance(node, ast.Attribute):
+            # Attribute access: config.topic
+            attr_str = self._extract_variable_reference(node)
+            if attr_str:
+                return f"{{{attr_str}}}"
+        
+        return None
+    
+    def _extract_variable_reference(self, node: ast.AST) -> Optional[str]:
+        """Extract a variable reference as a string.
+        
+        Examples:
+        - ast.Name("env") → "env"
+        - ast.Attribute(value=Name("config"), attr="env") → "config.env"
+        - ast.Subscript(value=Name("sys"), slice=Name("argv"), ...)  → "sys.argv"
+        """
+        if isinstance(node, ast.Name):
+            return node.id
+        
+        elif isinstance(node, ast.Attribute):
+            base = self._extract_variable_reference(node.value)
+            if base:
+                return f"{base}.{node.attr}"
+            else:
+                return node.attr
+        
+        elif isinstance(node, ast.Subscript):
+            # Handle sys.argv[1] or dict["key"]
+            base = self._extract_variable_reference(node.value)
+            if isinstance(node.slice, ast.Constant):
+                return f"{base}[{node.slice.value}]" if base else None
+            elif isinstance(node.slice, ast.Name):
+                return f"{base}.{node.slice.id}" if base else node.slice.id
+        
+        elif isinstance(node, ast.Call):
+            # Handle method calls like os.getenv("VAR")
+            if isinstance(node.func, ast.Attribute):
+                func_name = self._extract_variable_reference(node.func)
+                if func_name and len(node.args) > 0:
+                    if isinstance(node.args[0], ast.Constant):
+                        return f"{func_name}({node.args[0].value})"
         
         return None
     

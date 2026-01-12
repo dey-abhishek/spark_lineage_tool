@@ -20,7 +20,8 @@ class VariableResolver:
         
         # Patterns for variable references
         self.patterns = [
-            re.compile(r'\$\{([^}]+)\}'),  # ${var} - braced variables
+            re.compile(r'\$\{([^}]+)\}'),  # ${var} - braced variables (shell, Scala)
+            re.compile(r'\{([^}]+)\}'),     # {var} - braced without dollar (Python f-strings)
             re.compile(r'\$([A-Z_][A-Z0-9_]*)'),  # $VAR - uppercase environment-style
             re.compile(r'\$([a-z][a-zA-Z0-9_]*)'),  # $var - lowercase/camelCase (Scala style)
         ]
