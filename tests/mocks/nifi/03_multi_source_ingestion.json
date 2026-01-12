@@ -1,0 +1,59 @@
+{
+  "flowContents": {
+    "identifier": "root",
+    "name": "Multi-Source Data Ingestion",
+    "processors": [
+      {
+        "identifier": "proc-sftp-1",
+        "name": "Get Files from SFTP",
+        "type": "org.apache.nifi.processors.standard.GetSFTP",
+        "config": {
+          "properties": {
+            "Hostname": "sftp.vendor.com",
+            "Port": "22",
+            "Remote Path": "/exports/daily/${processing_date}",
+            "Username": "${sftp_username}",
+            "Private Key Path": "/keys/sftp_key"
+          }
+        }
+      },
+      {
+        "identifier": "proc-db-1",
+        "name": "Query Customer Database",
+        "type": "org.apache.nifi.processors.standard.QueryDatabaseTable",
+        "config": {
+          "properties": {
+            "Database Connection Pooling Service": "PostgreSQL-Connection-Pool",
+            "Table Name": "customers.master",
+            "Maximum-value Columns": "updated_at",
+            "SQL select query": "SELECT customer_id, name, email, tier FROM customers.master WHERE updated_at > ?"
+          }
+        }
+      },
+      {
+        "identifier": "proc-s3-1",
+        "name": "Fetch from S3 Bucket",
+        "type": "org.apache.nifi.processors.aws.s3.FetchS3Object",
+        "config": {
+          "properties": {
+            "Bucket": "company-data-lake",
+            "Object Key": "raw/transactions/${year}/${month}/${day}/",
+            "Region": "us-east-1"
+          }
+        }
+      },
+      {
+        "identifier": "proc-hdfs-1",
+        "name": "Put to HDFS Landing",
+        "type": "org.apache.nifi.processors.hadoop.PutHDFS",
+        "config": {
+          "properties": {
+            "Directory": "/data/landing/multi_source/${processing_date}",
+            "Hadoop Configuration Resources": "/etc/hadoop/conf/core-site.xml"
+          }
+        }
+      }
+    ]
+  }
+}
+

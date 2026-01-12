@@ -161,34 +161,34 @@ rules:
   - rule_id: shell_hdfs_get
     applies_to:
       - shell
-    pattern: "hdfs\\s+dfs\\s+-get\\s+(?P<source>\\S+)\\s+(?P<target>\\S+)"
+    pattern: "hdfs\\s+dfs\\s+-get\\s+(?:\"(?P<source1>[^\"]+)\"|'(?P<source2>[^']+)'|(?P<source3>\\S+))\\s+(?:\"(?P<target1>[^\"]+)\"|'(?P<target2>[^']+)'|(?P<target3>\\S+))"
     action: READ_HDFS_PATH
     confidence: 0.70
-    description: "Detect hdfs dfs -get commands"
+    description: "Detect hdfs dfs -get commands with quoted or unquoted paths"
   
   - rule_id: shell_hdfs_put
     applies_to:
       - shell
-    pattern: "hdfs\\s+dfs\\s+-put\\s+(?P<source>\\S+)\\s+(?P<target>\\S+)"
+    pattern: "hdfs\\s+dfs\\s+-put\\s+(?:-f\\s+)?(?:\"(?P<source1>[^\"]+)\"|'(?P<source2>[^']+)'|(?P<source3>\\S+))\\s+(?:\"(?P<target1>[^\"]+)\"|'(?P<target2>[^']+)'|(?P<target3>\\S+))"
     action: WRITE_HDFS_PATH
     confidence: 0.70
-    description: "Detect hdfs dfs -put commands"
+    description: "Detect hdfs dfs -put commands with quoted or unquoted paths and -f flag"
   
   - rule_id: shell_hdfs_cp
     applies_to:
       - shell
-    pattern: "hdfs\\s+dfs\\s+-cp\\s+(?P<source>\\S+)\\s+(?P<target>\\S+)"
+    pattern: "hdfs\\s+dfs\\s+-cp\\s+(?:\"(?P<source1>[^\"]+)\"|'(?P<source2>[^']+)'|(?P<source3>\\S+))\\s+(?:\"(?P<target1>[^\"]+)\"|'(?P<target2>[^']+)'|(?P<target3>\\S+))"
     action: WRITE_HDFS_PATH
     confidence: 0.70
-    description: "Detect hdfs dfs -cp commands"
+    description: "Detect hdfs dfs -cp commands with quoted or unquoted paths"
   
   - rule_id: shell_hdfs_mv
     applies_to:
       - shell
-    pattern: "hdfs\\s+dfs\\s+-mv\\s+(?P<source>\\S+)\\s+(?P<target>\\S+)"
+    pattern: "hdfs\\s+dfs\\s+-mv\\s+(?:\"(?P<source1>[^\"]+)\"|'(?P<source2>[^']+)'|(?P<source3>\\S+))\\s+(?:\"(?P<target1>[^\"]+)\"|'(?P<target2>[^']+)'|(?P<target3>\\S+))"
     action: WRITE_HDFS_PATH
     confidence: 0.70
-    description: "Detect hdfs dfs -mv commands"
+    description: "Detect hdfs dfs -mv commands with quoted or unquoted paths"
   
   - rule_id: shell_distcp
     applies_to:

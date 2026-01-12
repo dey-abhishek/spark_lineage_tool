@@ -1,0 +1,88 @@
+{
+  "flowContents": {
+    "identifier": "root",
+    "name": "Main Flow with Process Groups",
+    "processors": [
+      {
+        "identifier": "main-proc-1",
+        "name": "Main Get HDFS",
+        "type": "org.apache.nifi.processors.hadoop.GetHDFS",
+        "config": {
+          "properties": {
+            "HDFS Directory": "/data/input/main"
+          }
+        }
+      }
+    ],
+    "processGroups": [
+      {
+        "identifier": "group-1",
+        "name": "Data Processing Group",
+        "flowContents": {
+          "processors": [
+            {
+              "identifier": "group1-proc-1",
+              "name": "Process with Hive",
+              "type": "org.apache.nifi.processors.hive.SelectHiveQL",
+              "config": {
+                "properties": {
+                  "hiveql-query": "SELECT * FROM raw.transactions WHERE date = '${processing_date}'"
+                }
+              }
+            },
+            {
+              "identifier": "group1-proc-2",
+              "name": "Write to Kafka",
+              "type": "org.apache.nifi.processors.kafka.pubsub.PublishKafka_2_0",
+              "config": {
+                "properties": {
+                  "topic": "processed_transactions"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "identifier": "group-2",
+        "name": "Archive Group",
+        "flowContents": {
+          "processors": [
+            {
+              "identifier": "group2-proc-1",
+              "name": "Archive to S3",
+              "type": "org.apache.nifi.processors.aws.s3.PutS3Object",
+              "config": {
+                "properties": {
+                  "Bucket": "data-archive",
+                  "Object Key": "transactions/${year}/${month}/${day}/"
+                }
+              }
+            }
+          ],
+          "processGroups": [
+            {
+              "identifier": "nested-group-1",
+              "name": "Nested Cleanup",
+              "flowContents": {
+                "processors": [
+                  {
+                    "identifier": "nested-proc-1",
+                    "name": "Put to Cleanup HDFS",
+                    "type": "org.apache.nifi.processors.hadoop.PutHDFS",
+                    "config": {
+                      "properties": {
+                        "Directory": "/data/cleanup/archive"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
+

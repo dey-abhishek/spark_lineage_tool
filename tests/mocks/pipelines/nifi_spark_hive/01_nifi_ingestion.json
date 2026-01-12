@@ -1,0 +1,137 @@
+{
+  "flowContents": {
+    "identifier": "nifi-spark-hive-pipeline",
+    "name": "Multi-Stage Data Pipeline with Spark and Hive",
+    "processGroups": [
+      {
+        "identifier": "ingestion-group",
+        "name": "Data Ingestion",
+        "processors": [
+          {
+            "identifier": "fetch-s3-raw",
+            "name": "FetchS3Object",
+            "type": "org.apache.nifi.processors.aws.s3.FetchS3Object",
+            "config": {
+              "properties": {
+                "Bucket": "raw-data-bucket",
+                "Object Key": "sales/daily/${run_date}/*.json",
+                "Region": "us-east-1"
+              }
+            }
+          },
+          {
+            "identifier": "fetch-hdfs-logs",
+            "name": "FetchHDFS",
+            "type": "org.apache.nifi.processors.hadoop.FetchHDFS",
+            "config": {
+              "properties": {
+                "Hadoop Configuration Resources": "/etc/hadoop/conf/core-site.xml",
+                "HDFS Filename": "/logs/application/${run_date}/*.log"
+              }
+            }
+          },
+          {
+            "identifier": "consume-kafka-events",
+            "name": "ConsumeKafka",
+            "type": "org.apache.nifi.processors.kafka.pubsub.ConsumeKafka_2_6",
+            "config": {
+              "properties": {
+                "Kafka Brokers": "kafka1:9092,kafka2:9092",
+                "Topic Name(s)": "user-events,clickstream",
+                "Group ID": "nifi-pipeline"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "identifier": "landing-group",
+        "name": "Landing Zone",
+        "processors": [
+          {
+            "identifier": "put-hdfs-sales",
+            "name": "PutHDFS",
+            "type": "org.apache.nifi.processors.hadoop.PutHDFS",
+            "config": {
+              "properties": {
+                "Hadoop Configuration Resources": "/etc/hadoop/conf/core-site.xml",
+                "Directory": "/data/landing/sales/${run_date}"
+              }
+            }
+          },
+          {
+            "identifier": "put-hdfs-logs",
+            "name": "PutHDFS",
+            "type": "org.apache.nifi.processors.hadoop.PutHDFS",
+            "config": {
+              "properties": {
+                "Hadoop Configuration Resources": "/etc/hadoop/conf/core-site.xml",
+                "Directory": "/data/landing/logs/${run_date}"
+              }
+            }
+          },
+          {
+            "identifier": "put-hdfs-events",
+            "name": "PutHDFS",
+            "type": "org.apache.nifi.processors.hadoop.PutHDFS",
+            "config": {
+              "properties": {
+                "Hadoop Configuration Resources": "/etc/hadoop/conf/core-site.xml",
+                "Directory": "/data/landing/events/${run_date}"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "identifier": "hive-load-group",
+        "name": "Hive Loading",
+        "processors": [
+          {
+            "identifier": "select-staging-data",
+            "name": "SelectHiveQL",
+            "type": "org.apache.nifi.processors.hive.SelectHiveQL",
+            "config": {
+              "properties": {
+                "Hive Database Connection Pooling Service": "hive-connection-pool",
+                "HiveQL Select Query": "SELECT * FROM raw_db.sales_data WHERE load_date = '${run_date}'"
+              }
+            }
+          },
+          {
+            "identifier": "put-hive-staging",
+            "name": "PutHiveQL",
+            "type": "org.apache.nifi.processors.hive.PutHiveQL",
+            "config": {
+              "properties": {
+                "Hive Database Connection Pooling Service": "hive-connection-pool",
+                "Statement": "INSERT INTO TABLE staging_db.processed_sales PARTITION(run_date='${run_date}') VALUES (?, ?, ?, ?)"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "parameterContexts": [
+      {
+        "identifier": "pipeline-params",
+        "name": "Pipeline Parameters",
+        "parameters": [
+          {
+            "name": "run_date",
+            "value": "2024-01-15"
+          },
+          {
+            "name": "env",
+            "value": "prod"
+          },
+          {
+            "name": "hive_db",
+            "value": "analytics_db"
+          }
+        ]
+      }
+    ]
+  }
+}
+

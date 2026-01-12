@@ -3,9 +3,10 @@
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 import json
+import re
 
 from .base import BaseExtractor
-from lineage.ir import Fact, ReadFact, WriteFact, ExtractionMethod
+from lineage.ir import Fact, ReadFact, WriteFact, ConfigFact, ExtractionMethod
 
 
 class NiFiExtractor(BaseExtractor):
@@ -13,15 +14,50 @@ class NiFiExtractor(BaseExtractor):
     
     # Processor types that read data
     READ_PROCESSORS = {
-        "GetHDFS", "FetchHDFS", "GetFile", "FetchFile",
-        "GetHive", "SelectHiveQL", "GetHBase", "GetMongo",
-        "QueryDatabaseTable", "ExecuteSQL", "ListHDFS", "ListFile"
+        # HDFS
+        "GetHDFS", "FetchHDFS", "ListHDFS",
+        # File
+        "GetFile", "FetchFile", "ListFile", "TailFile",
+        # SFTP/FTP
+        "GetSFTP", "FetchSFTP", "ListSFTP", "GetFTP", "FetchFTP",
+        # Kafka
+        "ConsumeKafka", "ConsumeKafka_2_0", "ConsumeKafka_2_6", "ConsumeKafkaRecord",
+        # Database
+        "QueryDatabaseTable", "ExecuteSQL", "GenerateTableFetch", "ListDatabaseTables",
+        # Hive
+        "GetHive", "SelectHiveQL",
+        # HBase
+        "GetHBase", "FetchHBase", "ScanHBase",
+        # Mongo
+        "GetMongo", "GetMongoRecord",
+        # S3
+        "FetchS3Object", "ListS3",
+        # HTTP/REST
+        "InvokeHTTP", "GetHTTP",
     }
     
     # Processor types that write data
     WRITE_PROCESSORS = {
-        "PutHDFS", "PutFile", "PutHive", "PutHiveQL",
-        "PutHBase", "PutMongo", "PutSQL", "PutDatabaseRecord"
+        # HDFS
+        "PutHDFS",
+        # File
+        "PutFile",
+        # SFTP/FTP
+        "PutSFTP", "PutFTP",
+        # Kafka
+        "PublishKafka", "PublishKafka_2_0", "PublishKafka_2_6", "PublishKafkaRecord",
+        # Database
+        "PutSQL", "PutDatabaseRecord", "ExecuteSQLRecord",
+        # Hive
+        "PutHive", "PutHiveQL", "PutHiveStreaming", "PutHive3Streaming",
+        # HBase
+        "PutHBase", "PutHBaseRecord", "PutHBaseCell", "PutHBaseJSON",
+        # Mongo
+        "PutMongo", "PutMongoRecord",
+        # S3
+        "PutS3Object",
+        # Elasticsearch
+        "PutElasticsearch", "PutElasticsearchHttp", "PutElasticsearchRecord",
     }
     
     def __init__(self) -> None:
@@ -54,6 +90,36 @@ class NiFiExtractor(BaseExtractor):
             facts.extend(self._extract_from_flow(flow_data["flowContents"], source_file))
         elif "processors" in flow_data:
             facts.extend(self._extract_from_flow(flow_data, source_file))
+        
+        # Extract parameter contexts if available
+        if "parameterContexts" in flow_data:
+            facts.extend(self._extract_parameter_contexts(flow_data["parameterContexts"], source_file))
+        
+        return facts
+    
+    def _extract_parameter_contexts(self, contexts: List[Dict[str, Any]], source_file: str) -> List[Fact]:
+        """Extract parameter contexts as configuration facts."""
+        facts = []
+        
+        for context in contexts:
+            context_name = context.get("name", "")
+            parameters = context.get("parameters", [])
+            
+            for param in parameters:
+                param_name = param.get("name", "")
+                param_value = param.get("value", "")
+                
+                if param_name and param_value:
+                    fact = ConfigFact(
+                        source_file=source_file,
+                        line_number=0,
+                        confidence=0.95,
+                        extraction_method=ExtractionMethod.JSON_PARSE,
+                        evidence=f"Parameter Context: {context_name}",
+                        config_key=param_name,
+                        config_value=param_value
+                    )
+                    facts.append(fact)
         
         return facts
     
@@ -119,26 +185,105 @@ class NiFiExtractor(BaseExtractor):
         proc_id: str
     ) -> Optional[Fact]:
         """Create read fact from processor."""
-        # Extract path/table based on processor type
         dataset_urn = None
         dataset_type = "hdfs"
         
+        # HDFS processors
         if "HDFS" in proc_type:
-            dataset_urn = properties.get("Directory", properties.get("HDFS Directory"))
+            dataset_urn = properties.get("Directory") or properties.get("HDFS Directory") or properties.get("Directory Path")
             dataset_type = "hdfs"
-        elif "File" in proc_type:
-            dataset_urn = properties.get("Input Directory", properties.get("File to Fetch"))
-            dataset_type = "local"
+        
+        # File processors
+        elif "File" in proc_type and "HDFS" not in proc_type:
+            dataset_urn = properties.get("Input Directory") or properties.get("File to Fetch") or properties.get("Directory")
+            dataset_type = "file"
+        
+        # SFTP/FTP processors
+        elif "SFTP" in proc_type:
+            remote_path = properties.get("Remote Path") or properties.get("Path") or properties.get("Remote File")
+            hostname = properties.get("Hostname", "unknown_host")
+            if remote_path:
+                dataset_urn = f"sftp://{hostname}{remote_path}"
+                dataset_type = "sftp"
+        
+        elif "FTP" in proc_type:
+            remote_path = properties.get("Remote Path") or properties.get("Path")
+            hostname = properties.get("Hostname", "unknown_host")
+            if remote_path:
+                dataset_urn = f"ftp://{hostname}{remote_path}"
+                dataset_type = "ftp"
+        
+        # Kafka processors
+        elif "Kafka" in proc_type:
+            topic = properties.get("topic") or properties.get("Topic Name") or properties.get("Topic Names")
+            if topic:
+                dataset_urn = f"kafka://{topic}"
+                dataset_type = "kafka"
+        
+        # Hive processors
         elif "Hive" in proc_type:
-            table = properties.get("hive-table", properties.get("Table Name"))
+            table = properties.get("hive-table") or properties.get("Table Name") or properties.get("hive-table-name")
+            # Try to extract from HiveQL if table not found
+            if not table:
+                sql_statement = properties.get("SQL Statement", "") or properties.get("hiveql-query", "")
+                if sql_statement:
+                    # Extract table from SELECT FROM
+                    match = re.search(r'FROM\s+([\w.#{}]+)', sql_statement, re.IGNORECASE)
+                    if match:
+                        table = match.group(1)
+            
             if table:
-                dataset_urn = f"hive://{table}"
+                # Handle database.table format
+                if "." in table:
+                    dataset_urn = table
+                else:
+                    dataset_urn = f"default.{table}"
                 dataset_type = "hive"
+        
+        # HBase processors
+        elif "HBase" in proc_type:
+            table = properties.get("Table Name") or properties.get("table-name") or properties.get("HBase Table Name")
+            if table:
+                dataset_urn = f"hbase://{table}"
+                dataset_type = "hbase"
+        
+        # MongoDB processors
+        elif "Mongo" in proc_type:
+            collection = properties.get("Mongo Collection") or properties.get("Collection Name")
+            database = properties.get("Mongo Database Name") or properties.get("Database Name", "default")
+            if collection:
+                dataset_urn = f"mongodb://{database}/{collection}"
+                dataset_type = "mongodb"
+        
+        # SQL/Database processors
         elif "SQL" in proc_type or "Database" in proc_type:
-            table = properties.get("Table Name", properties.get("table-name"))
+            table = properties.get("Table Name") or properties.get("table-name")
+            # Try to extract from SQL
+            if not table:
+                sql_statement = properties.get("SQL select query", "") or properties.get("SQL Query", "")
+                if sql_statement:
+                    match = re.search(r'FROM\s+([\w.#{}]+)', sql_statement, re.IGNORECASE)
+                    if match:
+                        table = match.group(1)
+            
             if table:
                 dataset_urn = f"jdbc://{table}"
                 dataset_type = "jdbc"
+        
+        # S3 processors
+        elif "S3" in proc_type:
+            bucket = properties.get("Bucket") or properties.get("Bucket Name")
+            key = properties.get("Object Key") or properties.get("Prefix")
+            if bucket:
+                dataset_urn = f"s3://{bucket}/{key}" if key else f"s3://{bucket}"
+                dataset_type = "s3"
+        
+        # HTTP/REST processors
+        elif "HTTP" in proc_type:
+            url = properties.get("Remote URL") or properties.get("HTTP URL")
+            if url:
+                dataset_urn = url
+                dataset_type = "http"
         
         if not dataset_urn:
             return None
@@ -148,7 +293,7 @@ class NiFiExtractor(BaseExtractor):
             line_number=0,  # N/A for JSON
             dataset_urn=dataset_urn,
             dataset_type=dataset_type,
-            confidence=0.70,
+            confidence=0.75,
             extraction_method=ExtractionMethod.JSON_PARSE,
             evidence=f"{proc_type}: {proc_name}",
             has_placeholders="${" in dataset_urn or "#{" in dataset_urn
@@ -169,37 +314,105 @@ class NiFiExtractor(BaseExtractor):
         proc_id: str
     ) -> Optional[Fact]:
         """Create write fact from processor."""
-        # Extract path/table based on processor type
         dataset_urn = None
         dataset_type = "hdfs"
         
+        # HDFS processors
         if "HDFS" in proc_type:
-            dataset_urn = properties.get("Directory", properties.get("HDFS Directory"))
+            dataset_urn = properties.get("Directory") or properties.get("HDFS Directory") or properties.get("Directory Path")
             dataset_type = "hdfs"
-        elif "File" in proc_type:
-            dataset_urn = properties.get("Directory", properties.get("Output Directory"))
-            dataset_type = "local"
+        
+        # File processors
+        elif "File" in proc_type and "HDFS" not in proc_type:
+            dataset_urn = properties.get("Directory") or properties.get("Output Directory")
+            dataset_type = "file"
+        
+        # SFTP/FTP processors
+        elif "SFTP" in proc_type:
+            remote_path = properties.get("Remote Path") or properties.get("Path")
+            hostname = properties.get("Hostname", "unknown_host")
+            if remote_path:
+                dataset_urn = f"sftp://{hostname}{remote_path}"
+                dataset_type = "sftp"
+        
+        elif "FTP" in proc_type:
+            remote_path = properties.get("Remote Path") or properties.get("Path")
+            hostname = properties.get("Hostname", "unknown_host")
+            if remote_path:
+                dataset_urn = f"ftp://{hostname}{remote_path}"
+                dataset_type = "ftp"
+        
+        # Kafka processors
+        elif "Kafka" in proc_type:
+            topic = properties.get("topic") or properties.get("Topic Name")
+            if topic:
+                dataset_urn = f"kafka://{topic}"
+                dataset_type = "kafka"
+        
+        # Hive processors
         elif "Hive" in proc_type or "HiveQL" in proc_type:
-            # Try to get table name directly
-            table = properties.get("hive-table", properties.get("Table Name"))
+            table = properties.get("hive-table") or properties.get("Table Name") or properties.get("hive-table-name")
+            # Try to extract from HiveQL if table not found
             if not table:
-                # Try to extract from SQL Statement
+                sql_statement = properties.get("SQL Statement", "") or properties.get("hiveql-query", "")
+                if sql_statement:
+                    # Extract table from INSERT INTO
+                    match = re.search(r'INSERT\s+(?:INTO|OVERWRITE)\s+(?:TABLE\s+)?([\w.#{}]+)', sql_statement, re.IGNORECASE)
+                    if match:
+                        table = match.group(1)
+            
+            if table:
+                # Handle database.table format
+                if "." in table:
+                    dataset_urn = table
+                else:
+                    dataset_urn = f"default.{table}"
+                dataset_type = "hive"
+        
+        # HBase processors
+        elif "HBase" in proc_type:
+            table = properties.get("Table Name") or properties.get("table-name") or properties.get("HBase Table Name")
+            if table:
+                dataset_urn = f"hbase://{table}"
+                dataset_type = "hbase"
+        
+        # MongoDB processors
+        elif "Mongo" in proc_type:
+            collection = properties.get("Mongo Collection") or properties.get("Collection Name")
+            database = properties.get("Mongo Database Name") or properties.get("Database Name", "default")
+            if collection:
+                dataset_urn = f"mongodb://{database}/{collection}"
+                dataset_type = "mongodb"
+        
+        # SQL/Database processors
+        elif "SQL" in proc_type or "Database" in proc_type:
+            table = properties.get("Table Name") or properties.get("table-name")
+            # Try to extract from SQL
+            if not table:
                 sql_statement = properties.get("SQL Statement", "")
                 if sql_statement:
-                    # Extract table from INSERT INTO or similar
-                    import re
                     match = re.search(r'INSERT\s+INTO\s+([\w.#{}]+)', sql_statement, re.IGNORECASE)
                     if match:
                         table = match.group(1)
             
             if table:
-                dataset_urn = f"hive://{table}"
-                dataset_type = "hive"
-        elif "SQL" in proc_type or "Database" in proc_type:
-            table = properties.get("Table Name", properties.get("table-name"))
-            if table:
                 dataset_urn = f"jdbc://{table}"
                 dataset_type = "jdbc"
+        
+        # S3 processors
+        elif "S3" in proc_type:
+            bucket = properties.get("Bucket") or properties.get("Bucket Name")
+            key = properties.get("Object Key") or properties.get("Prefix")
+            if bucket:
+                dataset_urn = f"s3://{bucket}/{key}" if key else f"s3://{bucket}"
+                dataset_type = "s3"
+        
+        # Elasticsearch processors
+        elif "Elasticsearch" in proc_type:
+            index = properties.get("Index") or properties.get("Index Name") or properties.get("Identifier")
+            if index:
+                dataset_urn = f"elasticsearch://{index}"
+                dataset_type = "elasticsearch"
         
         if not dataset_urn:
             return None
@@ -209,7 +422,7 @@ class NiFiExtractor(BaseExtractor):
             line_number=0,
             dataset_urn=dataset_urn,
             dataset_type=dataset_type,
-            confidence=0.70,
+            confidence=0.75,
             extraction_method=ExtractionMethod.JSON_PARSE,
             evidence=f"{proc_type}: {proc_name}",
             has_placeholders="${" in dataset_urn or "#{" in dataset_urn
@@ -223,5 +436,5 @@ class NiFiExtractor(BaseExtractor):
     
     def get_confidence_base(self) -> float:
         """Get base confidence for NiFi extraction."""
-        return 0.70
+        return 0.75
 

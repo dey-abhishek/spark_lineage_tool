@@ -1,0 +1,195 @@
+{
+  "flowContents": {
+    "identifier": "comprehensive-pipeline",
+    "name": "Comprehensive Multi-Source Data Pipeline",
+    "comment": "Complete pipeline: SFTP → NiFi → HDFS → Spark → Hive → ML → Export",
+    "processGroups": [
+      {
+        "identifier": "sftp-ingestion-group",
+        "name": "SFTP Data Collection",
+        "processors": [
+          {
+            "identifier": "fetch-sftp-vendor1",
+            "name": "FetchSFTP - Vendor 1",
+            "type": "org.apache.nifi.processors.standard.FetchSFTP",
+            "config": {
+              "properties": {
+                "Hostname": "vendor1.data.com",
+                "Port": "22",
+                "Username": "data_user",
+                "Remote File": "/exports/transactions/${run_date}/*.csv",
+                "Private Key Path": "/keys/vendor1.pem"
+              }
+            }
+          },
+          {
+            "identifier": "fetch-sftp-vendor2",
+            "name": "FetchSFTP - Vendor 2",
+            "type": "org.apache.nifi.processors.standard.FetchSFTP",
+            "config": {
+              "properties": {
+                "Hostname": "vendor2.data.com",
+                "Port": "22",
+                "Username": "etl_user",
+                "Remote File": "/feeds/customers/${run_date}/*.json",
+                "Password": "${sftp.vendor2.password}"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "identifier": "multi-source-group",
+        "name": "Multi-Source Ingestion",
+        "processors": [
+          {
+            "identifier": "fetch-s3-external",
+            "name": "FetchS3Object",
+            "type": "org.apache.nifi.processors.aws.s3.FetchS3Object",
+            "config": {
+              "properties": {
+                "Bucket": "external-data-lake",
+                "Object Key": "partners/${partner_id}/data/${run_date}/*.parquet",
+                "Region": "us-west-2"
+              }
+            }
+          },
+          {
+            "identifier": "consume-kafka-stream",
+            "name": "ConsumeKafka",
+            "type": "org.apache.nifi.processors.kafka.pubsub.ConsumeKafka_2_6",
+            "config": {
+              "properties": {
+                "Kafka Brokers": "${kafka.brokers}",
+                "Topic Name(s)": "transactions,events,metrics",
+                "Group ID": "nifi-comprehensive-pipeline"
+              }
+            }
+          },
+          {
+            "identifier": "query-database",
+            "name": "ExecuteSQL",
+            "type": "org.apache.nifi.processors.standard.ExecuteSQL",
+            "config": {
+              "properties": {
+                "Database Connection Pooling Service": "oracle-connection-pool",
+                "SQL select query": "SELECT * FROM PROD_DB.CUSTOMER_MASTER WHERE LAST_UPDATED >= TO_DATE('${run_date}', 'YYYY-MM-DD')"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "identifier": "hdfs-landing-group",
+        "name": "HDFS Landing Zone",
+        "processors": [
+          {
+            "identifier": "put-hdfs-transactions",
+            "name": "PutHDFS - Transactions",
+            "type": "org.apache.nifi.processors.hadoop.PutHDFS",
+            "config": {
+              "properties": {
+                "Hadoop Configuration Resources": "/etc/hadoop/conf/core-site.xml,/etc/hadoop/conf/hdfs-site.xml",
+                "Directory": "/data/raw/transactions/${env}/${run_date}"
+              }
+            }
+          },
+          {
+            "identifier": "put-hdfs-customers",
+            "name": "PutHDFS - Customers",
+            "type": "org.apache.nifi.processors.hadoop.PutHDFS",
+            "config": {
+              "properties": {
+                "Hadoop Configuration Resources": "/etc/hadoop/conf/core-site.xml,/etc/hadoop/conf/hdfs-site.xml",
+                "Directory": "/data/raw/customers/${env}/${run_date}"
+              }
+            }
+          },
+          {
+            "identifier": "put-hdfs-partners",
+            "name": "PutHDFS - Partners",
+            "type": "org.apache.nifi.processors.hadoop.PutHDFS",
+            "config": {
+              "properties": {
+                "Hadoop Configuration Resources": "/etc/hadoop/conf/core-site.xml",
+                "Directory": "/data/raw/partners/${env}/${run_date}"
+              }
+            }
+          },
+          {
+            "identifier": "put-hdfs-realtime",
+            "name": "PutHDFS - Realtime",
+            "type": "org.apache.nifi.processors.hadoop.PutHDFS",
+            "config": {
+              "properties": {
+                "Hadoop Configuration Resources": "/etc/hadoop/conf/core-site.xml",
+                "Directory": "/data/raw/realtime/${env}/${run_date}"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "identifier": "hive-staging-group",
+        "name": "Hive Staging",
+        "processors": [
+          {
+            "identifier": "put-hive-transactions",
+            "name": "PutHiveQL - Transactions",
+            "type": "org.apache.nifi.processors.hive.PutHiveQL",
+            "config": {
+              "properties": {
+                "Hive Database Connection Pooling Service": "hive-connection-pool",
+                "Statement": "INSERT INTO TABLE ${hive_staging_db}.transactions PARTITION(run_date='${run_date}') VALUES (?, ?, ?, ?, ?)"
+              }
+            }
+          },
+          {
+            "identifier": "put-hive-customers",
+            "name": "PutHiveQL - Customers",
+            "type": "org.apache.nifi.processors.hive.PutHiveQL",
+            "config": {
+              "properties": {
+                "Hive Database Connection Pooling Service": "hive-connection-pool",
+                "Statement": "INSERT INTO TABLE ${hive_staging_db}.customers PARTITION(run_date='${run_date}') VALUES (?, ?, ?, ?)"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "parameterContexts": [
+      {
+        "identifier": "comprehensive-params",
+        "name": "Comprehensive Pipeline Parameters",
+        "parameters": [
+          {
+            "name": "run_date",
+            "value": "2024-01-15"
+          },
+          {
+            "name": "env",
+            "value": "prod"
+          },
+          {
+            "name": "partner_id",
+            "value": "partner_001"
+          },
+          {
+            "name": "kafka.brokers",
+            "value": "kafka1:9092,kafka2:9092,kafka3:9092"
+          },
+          {
+            "name": "hive_staging_db",
+            "value": "staging_prod"
+          },
+          {
+            "name": "sftp.vendor2.password",
+            "value": "encrypted_password"
+          }
+        ]
+      }
+    ]
+  }
+}
+

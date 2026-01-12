@@ -126,7 +126,14 @@ def main(repo: str, config: str, out: str, hive_metastore: str, hdfs_namenode: s
                 if hasattr(fact, 'config_key') and hasattr(fact, 'config_value'):
                     symbol_table.add_property(fact.config_key, fact.config_value)
             
-            canonicalizer = PathCanonicalizer(cfg.environments.get(cfg.active_environment, {}).get('base_dirs', {}))
+            # Get base directories from environment config
+            base_dirs = {}
+            if hasattr(cfg.environments, cfg.active_environment):
+                env_config = getattr(cfg.environments, cfg.active_environment)
+                if hasattr(env_config, 'base_dirs'):
+                    base_dirs = env_config.base_dirs or {}
+            
+            canonicalizer = PathCanonicalizer(base_dirs)
             resolver = VariableResolver(symbol_table, canonicalizer)
             progress.update(task, completed=True)
             

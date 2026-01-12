@@ -1,0 +1,80 @@
+{
+  "parameterContexts": [
+    {
+      "identifier": "ctx-1",
+      "name": "ETL-Parameters",
+      "description": "Parameters for ETL pipeline",
+      "parameters": [
+        {
+          "name": "source_hdfs_path",
+          "value": "/data/raw/customers",
+          "description": "Source HDFS path"
+        },
+        {
+          "name": "target_hive_table",
+          "value": "prod.customers_processed",
+          "description": "Target Hive table"
+        },
+        {
+          "name": "kafka_topic",
+          "value": "customer_updates",
+          "description": "Kafka topic for updates"
+        },
+        {
+          "name": "s3_bucket",
+          "value": "company-archive",
+          "description": "S3 bucket for archive"
+        }
+      ]
+    }
+  ],
+  "flowContents": {
+    "identifier": "root",
+    "name": "Parameterized ETL Pipeline",
+    "processors": [
+      {
+        "identifier": "proc-1",
+        "name": "Get from HDFS",
+        "type": "org.apache.nifi.processors.hadoop.GetHDFS",
+        "config": {
+          "properties": {
+            "HDFS Directory": "#{source_hdfs_path}"
+          }
+        }
+      },
+      {
+        "identifier": "proc-2",
+        "name": "Publish to Kafka",
+        "type": "org.apache.nifi.processors.kafka.pubsub.PublishKafka_2_6",
+        "config": {
+          "properties": {
+            "topic": "#{kafka_topic}",
+            "Kafka Brokers": "kafka-prod:9092"
+          }
+        }
+      },
+      {
+        "identifier": "proc-3",
+        "name": "Write to Hive",
+        "type": "org.apache.nifi.processors.hive.PutHiveQL",
+        "config": {
+          "properties": {
+            "SQL Statement": "INSERT INTO #{target_hive_table} SELECT * FROM staging.temp_data"
+          }
+        }
+      },
+      {
+        "identifier": "proc-4",
+        "name": "Archive to S3",
+        "type": "org.apache.nifi.processors.aws.s3.PutS3Object",
+        "config": {
+          "properties": {
+            "Bucket": "#{s3_bucket}",
+            "Object Key": "archive/${now():format('yyyy/MM/dd')}/data.parquet"
+          }
+        }
+      }
+    ]
+  }
+}
+

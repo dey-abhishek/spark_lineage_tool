@@ -1,0 +1,33 @@
+{
+  "flowContents": {
+    "identifier": "root",
+    "name": "HDFS File Pipeline",
+    "processors": [
+      {
+        "identifier": "proc-1",
+        "name": "Get Raw Data from HDFS",
+        "type": "org.apache.nifi.processors.hadoop.GetHDFS",
+        "config": {
+          "properties": {
+            "HDFS Directory": "/data/raw/transactions",
+            "Hadoop Configuration Resources": "/etc/hadoop/conf/core-site.xml",
+            "Keep Source File": "false"
+          }
+        }
+      },
+      {
+        "identifier": "proc-2",
+        "name": "Put Processed to HDFS",
+        "type": "org.apache.nifi.processors.hadoop.PutHDFS",
+        "config": {
+          "properties": {
+            "Directory": "/data/processed/transactions",
+            "Hadoop Configuration Resources": "/etc/hadoop/conf/core-site.xml",
+            "Conflict Resolution Strategy": "replace"
+          }
+        }
+      }
+    ]
+  }
+}
+

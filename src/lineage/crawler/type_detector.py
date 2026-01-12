@@ -84,9 +84,11 @@ class TypeDetector:
             r"hive -[ef]",
         ],
         FileType.NIFI: [
-            r'"encodingVersion"',
+            r'"flowContents"',
             r'"processors"',
-            r'"controllerServices"',
+            r'"processGroups"',
+            r'"parameterContexts"',
+            r'org\.apache\.nifi\.processors',
         ],
     }
     
@@ -154,6 +156,17 @@ class TypeDetector:
         """Detect file type using multiple strategies."""
         # Strategy 1: Check extension
         file_type = self.detect_from_extension(file_path)
+        
+        # Special case: .json files could be NiFi flows or generic JSON configs
+        # Check content first for .json files
+        if file_type == FileType.JSON:
+            # Try content-based detection first
+            content_type = self.detect_from_content(file_path)
+            if content_type == FileType.NIFI:
+                return FileType.NIFI
+            # Otherwise use the extension-based JSON type
+            return FileType.JSON
+        
         if file_type:
             return file_type
         

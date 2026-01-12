@@ -1,0 +1,57 @@
+{
+  "flowContents": {
+    "identifier": "root",
+    "name": "Database to NoSQL Migration",
+    "processors": [
+      {
+        "identifier": "proc-db-read",
+        "name": "Read from MySQL",
+        "type": "org.apache.nifi.processors.standard.ExecuteSQL",
+        "config": {
+          "properties": {
+            "Database Connection Pooling Service": "MySQL-Connection-Pool",
+            "SQL select query": "SELECT order_id, customer_id, amount, status FROM ecommerce.orders WHERE created_at >= '2024-01-01'"
+          }
+        }
+      },
+      {
+        "identifier": "proc-hbase-write",
+        "name": "Write to HBase",
+        "type": "org.apache.nifi.processors.hbase.PutHBaseJSON",
+        "config": {
+          "properties": {
+            "HBase Table Name": "orders_archive",
+            "Row Identifier Field Name": "order_id",
+            "Column Family": "cf1",
+            "HBase Client Service": "HBase-Client-Service"
+          }
+        }
+      },
+      {
+        "identifier": "proc-mongo-write",
+        "name": "Write to MongoDB",
+        "type": "org.apache.nifi.processors.mongodb.PutMongo",
+        "config": {
+          "properties": {
+            "Mongo URI": "mongodb://mongo-cluster:27017",
+            "Mongo Database Name": "analytics",
+            "Mongo Collection": "orders_historical"
+          }
+        }
+      },
+      {
+        "identifier": "proc-elastic-write",
+        "name": "Index in Elasticsearch",
+        "type": "org.apache.nifi.processors.elasticsearch.PutElasticsearchRecord",
+        "config": {
+          "properties": {
+            "Elasticsearch URL": "http://elastic-cluster:9200",
+            "Index": "orders-${year}-${month}",
+            "Type": "_doc"
+          }
+        }
+      }
+    ]
+  }
+}
+

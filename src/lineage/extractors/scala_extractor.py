@@ -7,6 +7,7 @@ import re
 from .base import BaseExtractor
 from lineage.ir import Fact, ReadFact, WriteFact, ConfigFact, ExtractionMethod
 from lineage.rules import RuleEngine
+from .method_call_tracker import ScalaMethodCallTracker
 
 
 class ScalaExtractor(BaseExtractor):
@@ -31,6 +32,7 @@ class ScalaExtractor(BaseExtractor):
             "read_table": re.compile(r'\.table\((?:(?:s?)"([^"]+)"|(\w+))\)', re.DOTALL),
             # Format with load pattern for Delta
             "read_format_load": re.compile(r'\.read\.format\("([^"]+)"\)\.load\((?:s?)"([^"]+)"\)', re.DOTALL),
+            "write_format_save": re.compile(r'\.write(?:\.\w+\([^)]*\))*\.format\("([^"]+)"\)\.save\((?:s?)"([^"]+)"\)', re.DOTALL),
             "write_parquet": re.compile(r'\.write(?:\.\w+\([^)]*\))*\.parquet\((?:(?:s?)"([^"]+)"|(\w+))\)', re.DOTALL),
             "write_csv": re.compile(r'\.write(?:\.\w+\([^)]*\))*\.csv\((?:(?:s?)"([^"]+)"|(\w+))\)', re.DOTALL),
             "write_json": re.compile(r'\.write(?:\.\w+\([^)]*\))*\.json\((?:(?:s?)"([^"]+)"|(\w+))\)', re.DOTALL),
@@ -72,6 +74,18 @@ class ScalaExtractor(BaseExtractor):
         # Extract variable definitions (val/var varName = "value")
         facts.extend(self._extract_variable_definitions(content_no_comments, source_file))
         
+        # Inter-procedural analysis: extract method definitions and calls
+        method_tracker = ScalaMethodCallTracker()
+        method_tracker.extract_methods(content_no_comments)
+        method_tracker.extract_calls(content_no_comments)
+        
+        # Get resolved method bodies (with arguments substituted)
+        resolved_bodies = method_tracker.get_tracker().get_all_resolved_bodies()
+        
+        # Extract facts from resolved method bodies
+        for call, resolved_body in resolved_bodies:
+            facts.extend(self._extract_from_resolved_body(resolved_body, source_file, call.line_number))
+        
         # Join lines for method chains (normalize whitespace around dots and newlines)
         content_joined = re.sub(r'\s*\n\s*\.', '.', content_no_comments)
         # Also normalize spaces around dots
@@ -79,7 +93,7 @@ class ScalaExtractor(BaseExtractor):
         
         # Extract read operations
         for pattern_name, pattern in self.patterns.items():
-            if pattern_name.startswith("read_"):
+            if pattern_name.startswith("read_") and pattern_name != "read_format_load":
                 for match in pattern.finditer(content_joined):
                     # Handle both capture groups: quoted string or variable name
                     path = match.group(1) if match.group(1) else match.group(2)
@@ -341,6 +355,117 @@ class ScalaExtractor(BaseExtractor):
                     confidence=0.88
                 )
                 facts.append(fact)
+        
+        return facts
+    
+    def _extract_from_resolved_body(self, resolved_body: str, source_file: str, line_number: int) -> List[Fact]:
+        """Extract facts from a resolved method body (with arguments substituted).
+        
+        This allows us to extract Spark API calls from custom wrapper methods.
+        """
+        facts = []
+        
+        # Normalize the resolved body
+        resolved_body = re.sub(r'\s*\n\s*\.', '.', resolved_body)
+        resolved_body = re.sub(r'\s*\.\s*', '.', resolved_body)
+        
+        # Try all read patterns
+        for pattern_name, pattern in self.patterns.items():
+            if pattern_name.startswith("read_") and pattern_name != "read_format_load":
+                for match in pattern.finditer(resolved_body):
+                    path = match.group(1) if match.group(1) else match.group(2)
+                    if not path:
+                        continue
+                    
+                    has_placeholders = "$" in path or (not path.startswith("/") and not path.startswith("hive://"))
+                    
+                    if "table" in pattern_name:
+                        dataset_type = "hive"
+                        urn = f"hive://{path}"
+                    else:
+                        dataset_type = "hdfs"
+                        urn = path
+                    
+                    fact = ReadFact(
+                        source_file=source_file,
+                        line_number=line_number,
+                        dataset_urn=urn,
+                        dataset_type=dataset_type,
+                        confidence=0.80,  # Slightly lower confidence for inter-procedural
+                        extraction_method=ExtractionMethod.REGEX,
+                        evidence=f"Resolved from custom wrapper call",
+                        has_placeholders=has_placeholders
+                    )
+                    facts.append(fact)
+            elif pattern_name == "read_format_load":
+                for match in pattern.finditer(resolved_body):
+                    format_type = match.group(1)
+                    path = match.group(2)
+                    if not path:
+                        continue
+                    
+                    has_placeholders = "$" in path
+                    
+                    fact = ReadFact(
+                        source_file=source_file,
+                        line_number=line_number,
+                        dataset_urn=path,
+                        dataset_type="hdfs",
+                        confidence=0.80,
+                        extraction_method=ExtractionMethod.REGEX,
+                        evidence=f"Resolved from custom wrapper call",
+                        has_placeholders=has_placeholders
+                    )
+                    facts.append(fact)
+        
+        # Try all write patterns
+        for pattern_name, pattern in self.patterns.items():
+            if pattern_name.startswith("write_") and pattern_name != "write_format_save" or pattern_name in ("save_as_table", "insert_into"):
+                for match in pattern.finditer(resolved_body):
+                    path = match.group(1) if match.group(1) else match.group(2)
+                    if not path:
+                        continue
+                    
+                    has_placeholders = "$" in path or (not path.startswith("/") and not path.startswith("hive://"))
+                    
+                    if "table" in pattern_name or pattern_name in ("save_as_table", "insert_into"):
+                        dataset_type = "hive"
+                        urn = f"hive://{path}"
+                    else:
+                        dataset_type = "hdfs"
+                        urn = path
+                    
+                    fact = WriteFact(
+                        source_file=source_file,
+                        line_number=line_number,
+                        dataset_urn=urn,
+                        dataset_type=dataset_type,
+                        confidence=0.80,  # Slightly lower confidence for inter-procedural
+                        extraction_method=ExtractionMethod.REGEX,
+                        evidence=f"Resolved from custom wrapper call",
+                        has_placeholders=has_placeholders
+                    )
+                    facts.append(fact)
+            elif pattern_name == "write_format_save":
+                for match in pattern.finditer(resolved_body):
+                    format_type = match.group(1)
+                    path = match.group(2)
+                    if not path:
+                        continue
+                    
+                    has_placeholders = "$" in path
+                    
+                    fact = WriteFact(
+                        source_file=source_file,
+                        line_number=line_number,
+                        dataset_urn=path,
+                        dataset_type="hdfs",
+                        confidence=0.80,
+                        extraction_method=ExtractionMethod.REGEX,
+                        evidence=f"Resolved from custom wrapper call",
+                        has_placeholders=has_placeholders
+                    )
+                    facts.append(fact)
         
         return facts
     

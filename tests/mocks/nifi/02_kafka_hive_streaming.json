@@ -1,0 +1,45 @@
+{
+  "flowContents": {
+    "identifier": "root",
+    "name": "Kafka to Hive Streaming Pipeline",
+    "processors": [
+      {
+        "identifier": "proc-kafka-1",
+        "name": "Consume from Kafka Topics",
+        "type": "org.apache.nifi.processors.kafka.pubsub.ConsumeKafka_2_6",
+        "config": {
+          "properties": {
+            "topic": "raw_events,user_actions",
+            "Kafka Brokers": "kafka-prod:9092",
+            "Group ID": "nifi-consumer-group-1",
+            "Offset Reset": "earliest"
+          }
+        }
+      },
+      {
+        "identifier": "proc-hive-1",
+        "name": "Write to Hive Staging",
+        "type": "org.apache.nifi.processors.hive.PutHive3Streaming",
+        "config": {
+          "properties": {
+            "hive-table-name": "staging.event_stream",
+            "Hive Configuration Resources": "/etc/hive/conf/hive-site.xml",
+            "Partition Values": "${event_date}"
+          }
+        }
+      },
+      {
+        "identifier": "proc-hive-2",
+        "name": "Insert into Analytics Table",
+        "type": "org.apache.nifi.processors.hive.PutHiveQL",
+        "config": {
+          "properties": {
+            "SQL Statement": "INSERT INTO analytics.user_events SELECT * FROM staging.event_stream WHERE event_type = 'click'",
+            "Hive Configuration Resources": "/etc/hive/conf/hive-site.xml"
+          }
+        }
+      }
+    ]
+  }
+}
+

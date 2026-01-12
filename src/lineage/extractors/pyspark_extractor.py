@@ -9,6 +9,7 @@ import sqlparse
 from .base import BaseExtractor
 from lineage.ir import Fact, ReadFact, WriteFact, ConfigFact, FactType, ExtractionMethod
 from lineage.rules import RuleEngine
+from .method_call_tracker import PythonMethodCallTracker
 
 
 class PySparkASTVisitor(ast.NodeVisitor):
@@ -191,6 +192,57 @@ class PySparkASTVisitor(ast.NodeVisitor):
                 self.facts.append(fact)
         
         # Continue visiting function body
+        self.generic_visit(node)
+    
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        """Visit class definitions to extract instance attributes from __init__."""
+        # Look for __init__ method
+        for item in node.body:
+            if isinstance(item, ast.FunctionDef) and item.name == '__init__':
+                # Look for assignments to self.attribute
+                for stmt in ast.walk(item):
+                    if isinstance(stmt, ast.Assign):
+                        # Check if target is self.attribute
+                        for target in stmt.targets:
+                            if (isinstance(target, ast.Attribute) and 
+                                isinstance(target.value, ast.Name) and 
+                                target.value.id == 'self'):
+                                
+                                attr_name = target.attr
+                                
+                                # Extract the value
+                                if isinstance(stmt.value, ast.Constant):
+                                    # Simple constant: self.attr = "value"
+                                    value = str(stmt.value.value)
+                                    config_source = "class_instance_attr"
+                                    
+                                elif isinstance(stmt.value, ast.JoinedStr):
+                                    # F-string: self.attr = f"value_{var}"
+                                    value = self._try_resolve_fstring(stmt.value)
+                                    config_source = "class_instance_fstring"
+                                    
+                                elif isinstance(stmt.value, ast.Name):
+                                    # Variable reference: self.attr = var
+                                    value = f"${{{stmt.value.id}}}"
+                                    config_source = "class_instance_var_ref"
+                                    
+                                else:
+                                    continue
+                                
+                                if value:
+                                    # Create ConfigFact with config.attr format
+                                    # We use a generic 'config' prefix since we don't track instantiation
+                                    fact = ConfigFact(
+                                        source_file=self.source_file,
+                                        line_number=stmt.lineno,
+                                        config_key=f"config.{attr_name}",
+                                        config_value=value,
+                                        config_source=config_source,
+                                        extraction_method=ExtractionMethod.AST,
+                                        confidence=0.75  # Lower confidence since we're guessing the instance name
+                                    )
+                                    self.facts.append(fact)
+        
         self.generic_visit(node)
     
     def _try_resolve_fstring(self, fstring_node: ast.JoinedStr) -> Optional[str]:
@@ -568,9 +620,18 @@ class PySparkASTVisitor(ast.NodeVisitor):
                 dataset_type_override = "kafka"
         
         # For streaming sources like Kafka, format is the key info
+        # But for file formats, we need an actual path
+        streaming_formats = ["kafka", "socket", "rate", "console"]
+        
         if format_type and not path:
-            path = f"stream:{format_type}"
-            evidence_path = format_type
+            if format_type.lower() in streaming_formats:
+                # For streaming sources without a path, format is the key
+                path = f"stream:{format_type}"
+                evidence_path = format_type
+            else:
+                # For file formats (avro, parquet, etc.), we need a path
+                # If path couldn't be extracted, don't create a fact
+                return None
         elif format_type:
             evidence_path = f"{format_type}:{path}"
         elif path:
@@ -1060,6 +1121,21 @@ class PySparkExtractor(BaseExtractor):
         except SyntaxError as e:
             print(f"Syntax error in {source_file}: {e}")
         
+        # Inter-procedural analysis: extract method definitions and calls
+        try:
+            method_tracker = PythonMethodCallTracker()
+            method_tracker.extract_methods(content)
+            method_tracker.extract_calls(content)
+            
+            # Get resolved method bodies (with arguments substituted)
+            resolved_bodies = method_tracker.get_tracker().get_all_resolved_bodies()
+            
+            # Extract facts from resolved method bodies
+            for call, resolved_body in resolved_bodies:
+                facts.extend(self._extract_from_resolved_body(resolved_body, source_file, call.line_number))
+        except Exception as e:
+            print(f"Warning: Inter-procedural analysis failed in {source_file}: {e}")
+        
         # Fallback to regex-based extraction if rule engine available
         if self.rule_engine:
             matches = self.rule_engine.apply_rules(content, "pyspark")
@@ -1067,6 +1143,34 @@ class PySparkExtractor(BaseExtractor):
                 fact = self._match_to_fact(match, source_file)
                 if fact:
                     facts.append(fact)
+        
+        return facts
+    
+    def _extract_from_resolved_body(self, resolved_body: str, source_file: str, line_number: int) -> List[Fact]:
+        """Extract facts from a resolved method body (with arguments substituted).
+        
+        This allows us to extract Spark API calls from custom wrapper methods.
+        """
+        facts = []
+        
+        # Try to parse the resolved body as Python and extract using AST
+        try:
+            # Wrap in a function to make it valid Python
+            wrapped_body = f"def _temp():\n{resolved_body}"
+            tree = ast.parse(wrapped_body)
+            visitor = PySparkASTVisitor(source_file)
+            visitor.visit(tree)
+            
+            # Update line numbers to reflect the actual call site
+            for fact in visitor.facts:
+                fact.line_number = line_number
+                fact.confidence = min(fact.confidence, 0.80)  # Slightly lower for inter-procedural
+                fact.evidence = f"Resolved from custom wrapper call: {fact.evidence}"
+            
+            facts.extend(visitor.facts)
+        except Exception as e:
+            # If AST parsing fails, silently skip
+            pass
         
         return facts
     
