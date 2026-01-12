@@ -30,44 +30,42 @@ class JavaExtractor(BaseExtractor):
         
         # Java-specific patterns
         self.patterns = {
-            # Spark Java API - Reads (handle whitespace and newlines)
-            "spark_read_parquet": re.compile(r'\.read\(\)\s*\.parquet\(\s*"([^"]+)"', re.DOTALL),
-            "spark_read_csv": re.compile(r'\.read\(\)\s*\.csv\(\s*"([^"]+)"', re.DOTALL),
-            "spark_read_json": re.compile(r'\.read\(\)\s*\.json\(\s*"([^"]+)"', re.DOTALL),
-            "spark_read_orc": re.compile(r'\.read\(\)\s*\.orc\(\s*"([^"]+)"', re.DOTALL),
-            "spark_read_text": re.compile(r'\.read\(\)\s*\.text\(\s*"([^"]+)"', re.DOTALL),
-            "spark_read_table": re.compile(r'\.read\(\)\s*\.table\(\s*"([^"]+)"', re.DOTALL),
-            "spark_table": re.compile(r'\.table\(\s*"([^"]+)"', re.DOTALL),
+            # Spark Java API - Reads
+            "spark_read_parquet": re.compile(r'\.read\(\)\.parquet\("([^"]+)"'),
+            "spark_read_csv": re.compile(r'\.read\(\)\.csv\("([^"]+)"'),
+            "spark_read_json": re.compile(r'\.read\(\)\.json\("([^"]+)"'),
+            "spark_read_orc": re.compile(r'\.read\(\)\.orc\("([^"]+)"'),
+            "spark_read_text": re.compile(r'\.read\(\)\.text\("([^"]+)"'),
+            "spark_read_table": re.compile(r'\.read\(\)\.table\("([^"]+)"'),
+            "spark_table": re.compile(r'\.table\("([^"]+)"'),
             
             # Spark Java API - Writes
-            "spark_write_parquet": re.compile(r'\.write\(\)\s*(?:\.mode\([^)]*\)\s*)?\.parquet\(\s*"([^"]+)"', re.DOTALL),
-            "spark_write_csv": re.compile(r'\.write\(\)\s*(?:\.mode\([^)]*\)\s*)?\.csv\(\s*"([^"]+)"', re.DOTALL),
-            "spark_write_json": re.compile(r'\.write\(\)\s*(?:\.mode\([^)]*\)\s*)?\.json\(\s*"([^"]+)"', re.DOTALL),
-            "spark_write_orc": re.compile(r'\.write\(\)\s*(?:\.mode\([^)]*\)\s*)?\.orc\(\s*"([^"]+)"', re.DOTALL),
-            "spark_write_text": re.compile(r'\.write\(\)\s*(?:\.mode\([^)]*\)\s*)?\.text\(\s*"([^"]+)"', re.DOTALL),
-            "spark_save_as_table": re.compile(r'\.saveAsTable\(\s*"([^"]+)"', re.DOTALL),
-            "spark_insert_into": re.compile(r'\.insertInto\(\s*"([^"]+)"', re.DOTALL),
+            "spark_write_parquet": re.compile(r'\.write\(\)(?:\.mode\([^)]*\))?\.parquet\("([^"]+)"'),
+            "spark_write_csv": re.compile(r'\.write\(\)(?:\.mode\([^)]*\))?\.csv\("([^"]+)"'),
+            "spark_write_json": re.compile(r'\.write\(\)(?:\.mode\([^)]*\))?\.json\("([^"]+)"'),
+            "spark_write_orc": re.compile(r'\.write\(\)(?:\.mode\([^)]*\))?\.orc\("([^"]+)"'),
+            "spark_write_text": re.compile(r'\.write\(\)(?:\.mode\([^)]*\))?\.text\("([^"]+)"'),
+            "spark_save_as_table": re.compile(r'\.saveAsTable\("([^"]+)"'),
+            "spark_insert_into": re.compile(r'\.insertInto\("([^"]+)"'),
             
             # Kafka - Native Java API
-            "kafka_producer_record": re.compile(r'new\s+ProducerRecord<[^>]*>\s*\(\s*"([^"]+)"', re.DOTALL),
-            "kafka_consumer_subscribe": re.compile(r'\.subscribe\s*\(\s*Collections\.singletonList\s*\(\s*"([^"]+)"\s*\)', re.DOTALL),
-            "kafka_consumer_subscribe_array": re.compile(r'\.subscribe\s*\(\s*Arrays\.asList\s*\(\s*"([^"]+)"', re.DOTALL),
+            "kafka_producer_record": re.compile(r'new ProducerRecord<[^>]*>\("([^"]+)"'),
+            "kafka_consumer_subscribe": re.compile(r'\.subscribe\(Collections\.singletonList\("([^"]+)"\)'),
+            "kafka_consumer_subscribe_array": re.compile(r'\.subscribe\(Arrays\.asList\("([^"]+)"'),
             
             # HDFS FileSystem operations
-            "hdfs_copy_from_local": re.compile(r'\.copyFromLocalFile\s*\([^,]+,\s*new\s+Path\s*\(\s*"([^"]+)"\s*\)', re.DOTALL),
-            "hdfs_copy_to_local": re.compile(r'\.copyToLocalFile\s*\(\s*new\s+Path\s*\(\s*"([^"]+)"\s*\)', re.DOTALL),
-            "hdfs_move_from_local": re.compile(r'\.moveFromLocalFile\s*\([^,]+,\s*new\s+Path\s*\(\s*"([^"]+)"\s*\)', re.DOTALL),
-            "hdfs_rename": re.compile(r'\.rename\s*\(\s*new\s+Path\s*\(\s*"([^"]+)"\s*\),\s*new\s+Path\s*\(\s*"([^"]+)"\s*\)', re.DOTALL),
-            "hdfs_delete": re.compile(r'\.delete\s*\(\s*new\s+Path\s*\(\s*"([^"]+)"\s*\)', re.DOTALL),
-            "hdfs_path_concat": re.compile(r'new\s+Path\s*\(\s*"([^"]+)"\s*\+\s*"([^"]+)"\s*\)', re.DOTALL),
-            "hdfs_path_new": re.compile(r'new\s+Path\s*\(\s*([A-Z_][A-Z0-9_]*(?:\s*\+\s*"[^"]*")?)', re.DOTALL),
+            "hdfs_copy_from_local": re.compile(r'\.copyFromLocalFile\([^,]+, new Path\("([^"]+)"\)'),
+            "hdfs_copy_to_local": re.compile(r'\.copyToLocalFile\(new Path\("([^"]+)"\)'),
+            "hdfs_move_from_local": re.compile(r'\.moveFromLocalFile\([^,]+, new Path\("([^"]+)"\)'),
+            "hdfs_rename_src": re.compile(r'\.rename\(new Path\("([^"]+)"\), new Path\("([^"]+)"\)'),
+            "hdfs_delete": re.compile(r'\.delete\(new Path\("([^"]+)"\)'),
             
             # JDBC
-            "jdbc_read": re.compile(r'\.jdbc\s*\([^,]+,\s*"([^"]+)"', re.DOTALL),
-            "jdbc_write": re.compile(r'\.jdbc\s*\([^,]+,\s*"([^"]+)"', re.DOTALL),
+            "jdbc_read": re.compile(r'\.jdbc\([^,]+, "([^"]+)"'),
+            "jdbc_write": re.compile(r'\.jdbc\([^,]+, "([^"]+)"'),
             
             # Spark SQL
-            "spark_sql": re.compile(r'\.sql\s*\(\s*"([^"]+)"\s*\)', re.DOTALL),
+            "spark_sql": re.compile(r'\.sql\("([^"]+)"\)'),
         }
     
     def extract(self, file_path: Path) -> List[Fact]:
@@ -92,9 +90,12 @@ class JavaExtractor(BaseExtractor):
         # Extract variable definitions (String var = "value")
         facts.extend(self._extract_variable_definitions(content_no_comments, source_file))
         
-        # Normalize whitespace for method chains
-        content_joined = re.sub(r'\s*\n\s*\.', '.', content_no_comments)
-        content_joined = re.sub(r'\s*\.\s*', '.', content_joined)
+        # Normalize whitespace for method chains - join lines that continue with a dot
+        # This handles patterns like:
+        #   spark.read()
+        #       .parquet("path")
+        content_joined = re.sub(r'\)\s*\n\s*\.', ').', content_no_comments)
+        content_joined = re.sub(r'\s+', ' ', content_joined)  # Collapse multiple spaces
         
         # Extract Spark read operations
         for pattern_name, pattern in self.patterns.items():
@@ -104,7 +105,8 @@ class JavaExtractor(BaseExtractor):
                     if not path:
                         continue
                     
-                    line_number = content[:match.start()].count("\n") + 1
+                    # Line number from original content (approximate)
+                    line_number = 1
                     has_placeholders = "$" in path or "{" in path
                     
                     if "table" in pattern_name:
@@ -134,7 +136,8 @@ class JavaExtractor(BaseExtractor):
                     if not path:
                         continue
                     
-                    line_number = content[:match.start()].count("\n") + 1
+                    # Line number from original content (approximate)
+                    line_number = 1
                     has_placeholders = "$" in path or "{" in path
                     
                     if pattern_name in ["spark_save_as_table", "spark_insert_into"]:
@@ -350,12 +353,60 @@ class JavaExtractor(BaseExtractor):
         return facts
     
     def _remove_comments(self, content: str) -> str:
-        """Remove Java comments (// and /* */)."""
-        # Remove single-line comments
-        content = re.sub(r'//.*?$', '', content, flags=re.MULTILINE)
-        # Remove multi-line comments
-        content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
-        return content
+        """Remove Java comments (// and /* */) while preserving strings."""
+        result = []
+        i = 0
+        in_string = False
+        string_char = None
+        
+        while i < len(content):
+            # Check for escape sequences
+            if in_string and content[i] == '\\' and i + 1 < len(content):
+                result.append(content[i:i+2])
+                i += 2
+                continue
+            
+            # Toggle string state
+            if content[i] in ('"', "'") and (i == 0 or content[i-1] != '\\'):
+                if not in_string:
+                    in_string = True
+                    string_char = content[i]
+                elif content[i] == string_char:
+                    in_string = False
+                    string_char = None
+                result.append(content[i])
+                i += 1
+                continue
+            
+            # If we're in a string, just copy the character
+            if in_string:
+                result.append(content[i])
+                i += 1
+                continue
+            
+            # Check for single-line comment
+            if i + 1 < len(content) and content[i:i+2] == '//':
+                # Skip until end of line
+                while i < len(content) and content[i] != '\n':
+                    i += 1
+                continue
+            
+            # Check for multi-line comment
+            if i + 1 < len(content) and content[i:i+2] == '/*':
+                # Skip until end of comment
+                i += 2
+                while i + 1 < len(content):
+                    if content[i:i+2] == '*/':
+                        i += 2
+                        break
+                    i += 1
+                continue
+            
+            # Regular character
+            result.append(content[i])
+            i += 1
+        
+        return ''.join(result)
     
     def _match_to_fact(self, match: dict, source_file: str) -> Optional[Fact]:
         """Convert rule match to fact."""
