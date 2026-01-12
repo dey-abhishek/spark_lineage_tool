@@ -30,6 +30,10 @@ class PriorityCalculator:
     def calculate_all(self) -> Dict[str, PriorityMetrics]:
         """Calculate metrics for all dataset nodes."""
         for node in self.graph.get_nodes_by_type(NodeType.DATASET):
+            # Skip wildcard patterns and temporary paths
+            if self._should_skip_node(node):
+                continue
+                
             metrics = self.calculate_node_metrics(node)
             self.metrics[node.node_id] = metrics
         
@@ -37,6 +41,37 @@ class PriorityCalculator:
         self._assign_migration_waves()
         
         return self.metrics
+    
+    def _should_skip_node(self, node: Node) -> bool:
+        """Check if node should be skipped from priority calculation."""
+        name = node.name.lower()
+        urn = node.urn.lower()
+        
+        # Skip wildcard patterns
+        if '*' in name or '*' in urn:
+            return True
+        
+        # Skip unresolved variables (placeholders)
+        if '${' in name or '${' in urn or '$(' in name or '$(' in urn:
+            # But keep if it's marked as fully resolved in metadata
+            if not node.metadata.get('fully_resolved', False):
+                return True
+        
+        # Skip temporary/staging paths
+        temp_patterns = ['_tmp', '_temp', '_staging', '_checkpoint', '_success', '_logs', '_metadata']
+        if any(pattern in name or pattern in urn for pattern in temp_patterns):
+            return True
+        
+        # Skip very generic names
+        generic_names = ['data', 'tmp', 'temp', 'staging', 'output', 'input', '-update', 'events']
+        if name in generic_names:
+            return True
+        
+        # Skip very short names (likely partial extractions)
+        if len(name) < 3:
+            return True
+        
+        return False
     
     def calculate_node_metrics(self, node: Node) -> PriorityMetrics:
         """Calculate priority metrics for a single node."""
