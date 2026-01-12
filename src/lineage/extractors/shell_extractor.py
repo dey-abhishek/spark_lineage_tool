@@ -129,6 +129,10 @@ class ShellExtractor(BaseExtractor):
             
             # Try to resolve date expressions like $(date +%Y-%m-%d) or `date +%Y-%m-%d`
             resolved_value = self._resolve_date_expression(value)
+            
+            # Also resolve parameter defaults: ${1:-default} -> default
+            resolved_value = self._resolve_parameter_defaults(resolved_value)
+            
             confidence = 0.85
             
             # Lower confidence if it still contains unresolved placeholders
@@ -211,6 +215,28 @@ class ShellExtractor(BaseExtractor):
         result = re.sub(param_date_pattern, replace_param_date, result)
         
         return result
+    
+    def _resolve_parameter_defaults(self, value: str) -> str:
+        """Resolve shell parameter expansion with defaults: ${var:-default} -> default
+        
+        Extracts default values from parameter expansion syntax.
+        Examples:
+            ${1:-2024-01-15} -> 2024-01-15
+            ${ENV:-prod} -> prod
+            ${2:-default} -> default
+        """
+        # Pattern: ${parameter:-default}
+        param_default_pattern = re.compile(r'\$\{([^}:]+):-([^}]+)\}')
+        
+        def extract_default(match):
+            # Always use the default value since we don't have runtime parameters
+            default_value = match.group(2)
+            # Recursively resolve if the default itself contains parameter expansion
+            if '${' in default_value and ':-' in default_value:
+                default_value = self._resolve_parameter_defaults(default_value)
+            return default_value
+        
+        return param_default_pattern.sub(extract_default, value)
     
     def _extract_hdfs_ops(self, content: str, source_file: str) -> List[Fact]:
         """Extract HDFS operations."""

@@ -464,12 +464,27 @@ class ExcelExporter:
             
             # Dataset URN/Path - ONLY for files (hdfs/local/sftp), empty for tables
             display_urn = ""
+            original_urn = dataset_node.metadata.get('original_urn', '')
+            resolved_urn = dataset_node.metadata.get('resolved_urn', dataset_urn)
+            
             if dataset_type in ['hdfs', 'file', 'local', 'sftp', 's3', 'gcs']:
-                # Show full path for file-based datasets
-                if dataset_urn and (dataset_urn.startswith('/') or '://' in dataset_urn):
-                    display_urn = dataset_urn
-                elif dataset_name.startswith('/') or '://' in dataset_name:
-                    display_urn = dataset_name
+                # Check if there was a transformation (pattern → resolved)
+                if original_urn and resolved_urn and original_urn != resolved_urn:
+                    # Check if original had parameter syntax
+                    if '${' in original_urn and (':-' in original_urn or '$(date' in original_urn):
+                        # Show: pattern → resolved
+                        display_urn = f"{original_urn} → {resolved_urn}"
+                    else:
+                        # Just show resolved
+                        display_urn = resolved_urn
+                else:
+                    # Show resolved value
+                    if resolved_urn and (resolved_urn.startswith('/') or '://' in resolved_urn):
+                        display_urn = resolved_urn
+                    elif dataset_urn and (dataset_urn.startswith('/') or '://' in dataset_urn):
+                        display_urn = dataset_urn
+                    elif dataset_name.startswith('/') or '://' in dataset_name:
+                        display_urn = dataset_name
             # For tables (hive/jdbc), leave URN empty - use Schema.Table column instead
             
             # Get metrics if available

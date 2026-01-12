@@ -60,6 +60,7 @@ class LineageBuilder:
                 name=self._get_dataset_name(resolved_urn),
                 metadata={
                     "original_urn": dataset_urn,
+                    "resolved_urn": resolved_urn,  # Store resolved separately
                     "fully_resolved": fully_resolved,
                     "dataset_type": dataset_type,
                     "fact_count": len(facts)
