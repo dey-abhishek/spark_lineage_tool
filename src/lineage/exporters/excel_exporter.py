@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Dict, List
 import json
+import re
 
 try:
     from openpyxl import Workbook
@@ -24,6 +25,28 @@ class ExcelExporter:
         self.metrics = metrics or {}
         if not EXCEL_AVAILABLE:
             raise ImportError("openpyxl is required for Excel export. Install with: pip install openpyxl")
+    
+    def _extract_table_from_jdbc_query(self, query: str) -> str:
+        """Extract table name from JDBC SQL query."""
+        if not query:
+            return ""
+        
+        # Remove outer parentheses if present
+        query = query.strip()
+        if query.startswith('(') and query.endswith(')'):
+            query = query[1:-1].strip()
+        
+        # Try to extract FROM clause
+        from_pattern = r'FROM\s+([a-zA-Z_][\w.]*)'
+        match = re.search(from_pattern, query, re.IGNORECASE)
+        if match:
+            table_name = match.group(1)
+            # Clean up
+            table_name = table_name.split()[0]
+            return table_name
+        
+        # If no FROM found, return truncated query
+        return f"(query:{query[:40]}...)"
     
     def export(self, output_path: Path) -> None:
         """Export to Excel workbook with multiple sheets."""
@@ -309,23 +332,39 @@ class ExcelExporter:
         """Create a flattened sheet perfect for pivot tables and analytics."""
         ws = wb.create_sheet("Analytics (Pivot-Ready)")
         
-        # Header
-        ws['A1'] = "Flattened Data for Analytics & Pivot Tables"
-        ws['A1'].font = Font(size=14, bold=True)
-        ws.merge_cells('A1:P1')
+        # Header with explanation
+        ws['A1'] = "Lineage Relationships - Each row shows: Source Job → Reads/Writes → Target Dataset"
+        ws['A1'].font = Font(size=12, bold=True, color="0563C1")
+        ws.merge_cells('A1:I1')
         
-        # Column headers - comprehensive for any analysis
+        # Column headers - simplified and focused
         headers = [
-            "Source File", "Source Type", "Source Job", 
+            "Source File", "Source Type",
             "Relationship", 
-            "Dataset Name", "Dataset URN/Path", "Dataset Type",
-            "Confidence", "Wave", "Priority Score",
-            "Fan In", "Fan Out", "Downstream Reach",
-            "Fully Resolved", "Schema.Table", "Evidence"
+            "Target Dataset", "Dataset URN/Path", "Dataset Type",
+            "Schema.Table",
+            "Fully Resolved", "Wave"
         ]
         for col, header in enumerate(headers, 1):
             cell = ws.cell(3, col, header)
             self._style_header_row(ws, 3, len(headers))
+        
+        # Add helpful column descriptions in row 2
+        descriptions = [
+            "Script/job file",
+            "PySpark/Hive/etc",
+            "READ or WRITE",
+            "Table/file name",
+            "Full path/URN",
+            "hive/hdfs/jdbc",
+            "database.table (Hive only)",
+            "All variables resolved?",
+            "Migration wave"
+        ]
+        for col, desc in enumerate(descriptions, 1):
+            cell = ws.cell(2, col, desc)
+            cell.font = Font(size=9, italic=True, color="666666")
+            cell.alignment = Alignment(horizontal="center")
         
         # Flatten all relationships
         row = 4
@@ -374,12 +413,32 @@ class ExcelExporter:
             dataset_urn = dataset_node.urn or dataset_name
             dataset_type = dataset_node.metadata.get('dataset_type', 'unknown')
             
+            # For JDBC: if dataset_name contains SQL query, try to extract table name for display
+            display_name = dataset_name
+            if dataset_type in ['jdbc', 'oracle', 'mysql', 'postgres', 'mssql']:
+                # Check if it's a URL#query pattern
+                if '#' in dataset_name:
+                    # Split URL and query
+                    parts = dataset_name.split('#', 1)
+                    query_part = parts[1] if len(parts) > 1 else dataset_name
+                    
+                    # Try to extract table name from query
+                    if 'SELECT' in query_part.upper() or 'FROM' in query_part.upper():
+                        table_name = self._extract_table_from_jdbc_query(query_part)
+                        if table_name and not table_name.startswith('(query:'):
+                            display_name = table_name
+                elif 'SELECT' in dataset_name.upper() or 'FROM' in dataset_name.upper():
+                    # Direct query in name
+                    table_name = self._extract_table_from_jdbc_query(dataset_name)
+                    if table_name and not table_name.startswith('(query:'):
+                        display_name = table_name
+            
             # Extract schema.table format if it's a Hive table
             schema_table = ""
             if dataset_type in ['hive', 'table']:
                 # Check if name already has schema.table format
-                if '.' in dataset_name and not dataset_name.startswith('/'):
-                    schema_table = dataset_name
+                if '.' in display_name and not display_name.startswith('/'):
+                    schema_table = display_name
                 elif '.' in dataset_urn and not dataset_urn.startswith('/') and '://' not in dataset_urn:
                     schema_table = dataset_urn
             
@@ -395,10 +454,6 @@ class ExcelExporter:
             # Get metrics if available
             metrics = self.metrics.get(dataset_node.node_id, None)
             wave = metrics.migration_wave if metrics else 0
-            priority = round(metrics.priority_score, 2) if metrics else 0
-            fan_in = metrics.fan_in if metrics else 0
-            fan_out = metrics.fan_out if metrics else 0
-            reach = metrics.downstream_reach if metrics else 0
             
             # Determine if fully resolved (no placeholders)
             fully_resolved = dataset_node.metadata.get('fully_resolved', False)
@@ -409,68 +464,67 @@ class ExcelExporter:
                 else:
                     fully_resolved = True
             
-            # Populate row
+            # Populate row - simplified columns (9 total)
             ws.cell(row, 1, short_file)
             ws.cell(row, 2, source_type)
-            ws.cell(row, 3, job_node.name)
-            ws.cell(row, 4, relationship)
-            ws.cell(row, 5, dataset_name)
-            ws.cell(row, 6, display_urn)
-            ws.cell(row, 7, dataset_type)
-            ws.cell(row, 8, round(edge.confidence, 2))
-            ws.cell(row, 9, f"Wave {wave}" if wave > 0 else "N/A")
-            ws.cell(row, 10, priority)
-            ws.cell(row, 11, fan_in)
-            ws.cell(row, 12, fan_out)
-            ws.cell(row, 13, reach)
-            ws.cell(row, 14, "Yes" if fully_resolved else "No")
-            ws.cell(row, 15, schema_table if schema_table else "N/A")
-            ws.cell(row, 16, edge.evidence[:50] if edge.evidence else "")
-            
-            # Color-code by confidence
-            if edge.confidence >= 0.8:
-                fill_color = "C6EFCE"
-            elif edge.confidence >= 0.6:
-                fill_color = "FFEB9C"
-            else:
-                fill_color = "FFC7CE"
-            ws.cell(row, 8).fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+            ws.cell(row, 3, relationship)
+            ws.cell(row, 4, display_name[:100])  # Target Dataset - cleaned name
+            ws.cell(row, 5, display_urn[:200])   # Dataset URN/Path
+            ws.cell(row, 6, dataset_type)
+            ws.cell(row, 7, schema_table if schema_table else "N/A")  # Schema.Table
+            ws.cell(row, 8, "Yes" if fully_resolved else "No")        # Fully Resolved
+            ws.cell(row, 9, f"Wave {wave}" if wave > 0 else "N/A")    # Wave
             
             # Color-code fully resolved status
             if fully_resolved:
-                ws.cell(row, 14).fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+                ws.cell(row, 8).fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
             else:
-                ws.cell(row, 14).fill = PatternFill(start_color="FFF4E6", end_color="FFF4E6", fill_type="solid")
+                ws.cell(row, 8).fill = PatternFill(start_color="FFF4E6", end_color="FFF4E6", fill_type="solid")
             
             row += 1
         
         # Add instructions
         row += 2
-        ws.cell(row, 1, "How to Use This Sheet for Analytics:").font = Font(bold=True, size=11, color="0563C1")
+        ws.cell(row, 1, "💡 Column Explanations:").font = Font(bold=True, size=11, color="0563C1")
+        row += 1
+        explanations = [
+            "• Target Dataset (Col 4): The table/file that the source job READS FROM or WRITES TO",
+            "• Dataset URN/Path (Col 5): Full path for files (e.g., hdfs:///data/raw/customers) or qualified name for tables",
+            "• Schema.Table (Col 7): For Hive tables only - database.table format (e.g., analytics.customers)",
+            "• Relationship (Col 3): READ = job reads from this dataset | WRITE = job writes to this dataset",
+            "• Fully Resolved (Col 8): Yes = all variables resolved | No = contains ${VAR} or parameters",
+        ]
+        for explanation in explanations:
+            ws.cell(row, 1, explanation)
+            ws.merge_cells(f'A{row}:F{row}')
+            row += 1
+        
+        row += 1
+        ws.cell(row, 1, "📊 How to Use for Analytics:").font = Font(bold=True, size=11, color="0563C1")
         row += 1
         instructions = [
             "1. Create Pivot Table: Select all data → Insert → Pivot Table",
-            "2. Count relationships per source: Rows=Source File, Values=Count of Relationship",
-            "3. Analyze by type: Rows=Source Type, Columns=Relationship, Values=Count",
-            "4. Dataset analysis: Use 'Dataset URN/Path' for file-based or 'Schema.Table' for tables",
-            "5. Filter 'Fully Resolved'=No to find datasets needing variable resolution",
-            "6. Group by 'Dataset Type' to analyze HDFS vs Hive vs JDBC separately"
+            "2. Relationships per source: Rows=Source File, Values=Count",
+            "3. Read/Write breakdown: Rows=Source File, Columns=Relationship, Values=Count",
+            "4. Find job inputs: Filter Relationship=READ, then filter Source File",
+            "5. Find job outputs: Filter Relationship=WRITE, then filter Source File",
+            "6. Hive table analysis: Filter Dataset Type=hive, use Schema.Table column",
         ]
         for instruction in instructions:
             ws.cell(row, 1, instruction)
-            ws.merge_cells(f'A{row}:D{row}')
+            ws.merge_cells(f'A{row}:E{row}')
             row += 1
         
-        # Auto-size columns
+        # Auto-size columns (9 columns now)
         ws.column_dimensions['A'].width = 30  # Source File
         ws.column_dimensions['B'].width = 15  # Source Type
-        ws.column_dimensions['C'].width = 30  # Source Job
-        ws.column_dimensions['D'].width = 12  # Relationship
-        ws.column_dimensions['E'].width = 30  # Dataset Name
-        ws.column_dimensions['F'].width = 50  # Dataset URN/Path (wider for paths)
-        ws.column_dimensions['G'].width = 15  # Dataset Type
-        for col in range(8, len(headers) + 1):
-            ws.column_dimensions[get_column_letter(col)].width = 15
+        ws.column_dimensions['C'].width = 12  # Relationship
+        ws.column_dimensions['D'].width = 40  # Target Dataset
+        ws.column_dimensions['E'].width = 55  # Dataset URN/Path
+        ws.column_dimensions['F'].width = 12  # Dataset Type
+        ws.column_dimensions['G'].width = 35  # Schema.Table
+        ws.column_dimensions['H'].width = 15  # Fully Resolved
+        ws.column_dimensions['I'].width = 10  # Wave
     
     def _create_datasets_sheet(self, wb: Workbook) -> None:
         """Create all datasets sheet."""

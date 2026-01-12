@@ -657,6 +657,28 @@ class PySparkASTVisitor(ast.NodeVisitor):
         
         return None
     
+    def _extract_table_from_query(self, query: str) -> Optional[str]:
+        """Extract table name from SQL query or subquery."""
+        if not query:
+            return None
+        
+        # Remove outer parentheses if present: (SELECT ... FROM table) -> SELECT ... FROM table
+        query = query.strip()
+        if query.startswith('(') and query.endswith(')'):
+            query = query[1:-1].strip()
+        
+        # Try to extract FROM clause
+        # Pattern: FROM schema.table or FROM table
+        from_pattern = r'FROM\s+([a-zA-Z_][\w.]*)'
+        match = re.search(from_pattern, query, re.IGNORECASE)
+        if match:
+            table_name = match.group(1)
+            # Clean up - remove any trailing conditions
+            table_name = table_name.split()[0]  # Take first word only
+            return table_name
+        
+        return None
+    
     def _extract_jdbc_facts(self, node: ast.Call, chain: List[str]) -> List[Fact]:
         """Extract JDBC read/write operations."""
         facts = []
@@ -681,7 +703,14 @@ class PySparkASTVisitor(ast.NodeVisitor):
             if not table:
                 table = self._extract_option_value(node, "dbtable")
                 if not table:
-                    table = self._extract_option_value(node, "query")
+                    # Query option contains SQL - extract table name from it
+                    query = self._extract_option_value(node, "query")
+                    if query:
+                        # Try to extract table name from SELECT query
+                        table = self._extract_table_from_query(query)
+                        if not table:
+                            # Fall back to query itself, but mark it
+                            table = f"(query:{query[:50]}...)" if len(query) > 50 else f"(query:{query})"
             
             if url or table:
                 # Determine database type from JDBC URL
