@@ -31,8 +31,8 @@ class ScalaExtractor(BaseExtractor):
             "read_orc": re.compile(r'\.read(?:\.\w+\([^)]*\))*\.orc\((?:(?:s?)"([^"]+)"|(\w+))\)', re.DOTALL),
             "read_table": re.compile(r'\.table\((?:(?:s?)"([^"]+)"|(\w+))\)', re.DOTALL),
             # Format with load pattern for Delta
-            "read_format_load": re.compile(r'\.read\.format\("([^"]+)"\)\.load\((?:s?)"([^"]+)"\)', re.DOTALL),
-            "write_format_save": re.compile(r'\.write(?:\.\w+\([^)]*\))*\.format\("([^"]+)"\)\.save\((?:s?)"([^"]+)"\)', re.DOTALL),
+            "read_format_load": re.compile(r'\.read\.format\("([^"]+)"\)(?:\.\w+\([^)]*\))*\.load\((?:s?)"([^"]+)"\)', re.DOTALL),
+            "write_format_save": re.compile(r'\.write(?:\.\w+\([^)]*\))*\.format\("([^"]+)"\)(?:\.\w+\([^)]*\))*\.save\((?:s?)"([^"]+)"\)', re.DOTALL),
             "write_parquet": re.compile(r'\.write(?:\.\w+\([^)]*\))*\.parquet\((?:(?:s?)"([^"]+)"|(\w+))\)', re.DOTALL),
             "write_csv": re.compile(r'\.write(?:\.\w+\([^)]*\))*\.csv\((?:(?:s?)"([^"]+)"|(\w+))\)', re.DOTALL),
             "write_json": re.compile(r'\.write(?:\.\w+\([^)]*\))*\.json\((?:(?:s?)"([^"]+)"|(\w+))\)', re.DOTALL),
@@ -134,11 +134,19 @@ class ScalaExtractor(BaseExtractor):
                     
                     has_placeholders = "$" in path
                     
+                    # Determine dataset type based on format
+                    if format_type == "delta":
+                        dataset_type = "delta"
+                    elif "sftp" in format_type.lower():
+                        dataset_type = "sftp"
+                    else:
+                        dataset_type = "hdfs"
+                    
                     fact = ReadFact(
                         source_file=source_file,
                         line_number=line_number,
                         dataset_urn=path,
-                        dataset_type="delta" if format_type == "delta" else "hdfs",
+                        dataset_type=dataset_type,
                         confidence=0.75,
                         extraction_method=ExtractionMethod.REGEX,
                         evidence=match.group(0)[:100],
@@ -151,34 +159,65 @@ class ScalaExtractor(BaseExtractor):
         for pattern_name, pattern in self.patterns.items():
             if pattern_name.startswith("write_") or pattern_name in ["save_as_table", "insert_into"]:
                 for match in pattern.finditer(content_joined):
-                    # Handle both capture groups: quoted string or variable name
-                    path = match.group(1) if match.group(1) else match.group(2)
-                    if not path:
-                        continue
-                    
-                    line_number = content[:match.start()].count("\n") + 1
-                    
-                    # Check for string interpolation or variable reference
-                    has_placeholders = "$" in path or (not path.startswith("/") and not path.startswith("hive://"))
-                    
-                    if pattern_name in ["save_as_table", "insert_into"]:
-                        dataset_type = "hive"
-                        urn = f"hive://{path}"
+                    # Special handling for write_format_save pattern (has 2 groups: format, path)
+                    if pattern_name == "write_format_save":
+                        format_type = match.group(1)
+                        path = match.group(2)
+                        if not path:
+                            continue
+                        
+                        line_number = content[:match.start()].count("\n") + 1
+                        has_placeholders = "$" in path
+                        
+                        # Determine dataset type based on format
+                        if format_type == "delta":
+                            dataset_type = "delta"
+                        elif "sftp" in format_type.lower():
+                            dataset_type = "sftp"
+                        else:
+                            dataset_type = "hdfs"
+                        
+                        fact = WriteFact(
+                            source_file=source_file,
+                            line_number=line_number,
+                            dataset_urn=path,
+                            dataset_type=dataset_type,
+                            confidence=0.75,
+                            extraction_method=ExtractionMethod.REGEX,
+                            evidence=match.group(0)[:100],
+                            has_placeholders=has_placeholders
+                        )
+                        fact.params["format"] = format_type
+                        facts.append(fact)
                     else:
-                        dataset_type = "hdfs"
-                        urn = path
-                    
-                    fact = WriteFact(
-                        source_file=source_file,
-                        line_number=line_number,
-                        dataset_urn=urn,
-                        dataset_type=dataset_type,
-                        confidence=0.75,
-                        extraction_method=ExtractionMethod.REGEX,
-                        evidence=match.group(0),
-                        has_placeholders=has_placeholders
-                    )
-                    facts.append(fact)
+                        # Handle both capture groups: quoted string or variable name
+                        path = match.group(1) if match.group(1) else match.group(2)
+                        if not path:
+                            continue
+                        
+                        line_number = content[:match.start()].count("\n") + 1
+                        
+                        # Check for string interpolation or variable reference
+                        has_placeholders = "$" in path or (not path.startswith("/") and not path.startswith("hive://"))
+                        
+                        if pattern_name in ["save_as_table", "insert_into"]:
+                            dataset_type = "hive"
+                            urn = f"hive://{path}"
+                        else:
+                            dataset_type = "hdfs"
+                            urn = path
+                        
+                        fact = WriteFact(
+                            source_file=source_file,
+                            line_number=line_number,
+                            dataset_urn=urn,
+                            dataset_type=dataset_type,
+                            confidence=0.75,
+                            extraction_method=ExtractionMethod.REGEX,
+                            evidence=match.group(0),
+                            has_placeholders=has_placeholders
+                        )
+                        facts.append(fact)
         
         # Extract JDBC operations
         for pattern_name, pattern in self.patterns.items():
