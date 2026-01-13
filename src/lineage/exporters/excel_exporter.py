@@ -31,9 +31,8 @@ class ExcelExporter:
         name = node.name.lower()
         urn = node.urn.lower()
         
-        # Skip wildcard patterns
-        if '*' in name or '*' in urn:
-            return True
+        # NOTE: Wildcards are valid patterns and should NOT be excluded
+        # Users use wildcards like /data/input/* to represent all files in a directory
         
         # Skip temporary/staging paths
         temp_patterns = ['_tmp', '_temp', '_staging', '_checkpoint', '_success', '_logs', '_metadata']
@@ -45,8 +44,8 @@ class ExcelExporter:
         if name in generic_names:
             return True
         
-        # Skip very short names (likely partial extractions)
-        if len(name) < 3:
+        # Skip very short names (likely partial extractions), BUT allow wildcards
+        if len(name) < 3 and name not in ['*', '*.']:
             return True
         
         # KEEP unresolved variables like hdfsDir, inputPath, etc.
