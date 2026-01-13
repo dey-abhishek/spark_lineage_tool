@@ -583,7 +583,19 @@ pytest tests/ -v --cov=src/lineage
 
 ## 📄 License
 
-MIT
+Databricks License
+
+Copyright (2026) Databricks, Inc.
+
+This project is licensed under the Databricks License. See [LICENSE](LICENSE) file for full terms.
+
+**Key Points:**
+- Licensed Materials may only be used in connection with Databricks Services
+- Redistribution allowed with conditions (see LICENSE file)
+- Provided "AS-IS" with no warranties
+- This is a utility tool, not a product
+
+For full license terms, see the [LICENSE](LICENSE) file or visit [Databricks Legal](https://www.databricks.com/legal/mcsa).
 
 ## 🙏 Acknowledgments
 
