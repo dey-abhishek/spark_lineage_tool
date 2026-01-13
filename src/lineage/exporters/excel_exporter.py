@@ -447,11 +447,23 @@ class ExcelExporter:
             relationship = ""
             
             if source_node.node_type == NodeType.DATASET and target_node.node_type == NodeType.DATASET:
-                # TRANSFORM: Source Dataset → Target Dataset (no job)
+                # PRODUCES: Source Dataset → Target Dataset (via job)
                 source_dataset_node = source_node
                 target_dataset_node = target_node
-                relationship = "TRANSFORM"
-                job_name = "(direct transformation)"
+                relationship = "PRODUCES"
+                
+                # Extract job name from edge metadata
+                job_urn = edge.metadata.get('job', '')
+                if job_urn:
+                    # Find the job node by URN
+                    job_node_for_edge = self.graph.get_node_by_urn(job_urn)
+                    if job_node_for_edge:
+                        source_file = job_node_for_edge.metadata.get('source_file', '')
+                        job_name = source_file.split('/')[-1] if '/' in source_file else source_file
+                    else:
+                        job_name = job_urn.split('/')[-1] if '/' in job_urn else job_urn
+                else:
+                    job_name = "(direct transformation)"
             elif source_node.node_type == NodeType.JOB and target_node.node_type == NodeType.DATASET:
                 # WRITE: Job → Target Dataset
                 job_node = source_node
