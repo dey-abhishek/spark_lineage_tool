@@ -1,8 +1,12 @@
 """Scala Spark extractor using pattern matching."""
 
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
+from datetime import datetime
 import re
+import sqlparse
+from sqlparse.sql import Token
+from sqlparse.tokens import Keyword
 
 from .base import BaseExtractor
 from lineage.ir import Fact, ReadFact, WriteFact, ConfigFact, ExtractionMethod
@@ -40,9 +44,9 @@ class ScalaExtractor(BaseExtractor):
             "save_as_table": re.compile(r'\.saveAsTable\((?:(?:s?)"([^"]+)"|(\w+))\)', re.DOTALL),
             "insert_into": re.compile(r'\.insertInto\((?:(?:s?)"([^"]+)"|(\w+))\)', re.DOTALL),
             "spark_sql": re.compile(r'\.sql\((?:s?)"([^"]+)"\)', re.DOTALL),
-            # JDBC patterns
-            "jdbc_read": re.compile(r'\.read\.jdbc\([^,]+,\s*(?:s?)"([^"]+)"', re.DOTALL),
-            "jdbc_write": re.compile(r'\.write\.jdbc\([^,]+,\s*(?:s?)"([^"]+)"', re.DOTALL),
+            # JDBC patterns - handle both single and triple-quoted strings
+            "jdbc_read": re.compile(r'\.read\.jdbc\([^,]+,\s*(?:s?)(?:"""([^"]+(?:"[^"]|""[^"])*?)"""|"([^"]+)")', re.DOTALL),
+            "jdbc_write": re.compile(r'\.write\.jdbc\([^,]+,\s*(?:s?)(?:"""([^"]+(?:"[^"]|""[^"])*?)"""|"([^"]+)")', re.DOTALL),
             # Kafka patterns - Spark structured streaming
             "kafka_read_stream": re.compile(r'\.readStream\.format\("kafka"\).*?\.option\("subscribe",\s*"([^"]+)"\)', re.DOTALL),
             "kafka_write_stream": re.compile(r'\.writeStream\.format\("kafka"\).*?\.option\("topic",\s*"([^"]+)"\)', re.DOTALL),
@@ -223,38 +227,50 @@ class ScalaExtractor(BaseExtractor):
         for pattern_name, pattern in self.patterns.items():
             if pattern_name in ["jdbc_read", "jdbc_write"]:
                 for match in pattern.finditer(content_joined):
-                    table = match.group(1)
+                    # Handle both triple-quoted (group 1) and single-quoted (group 2) strings
+                    table_or_query = match.group(1) if match.group(1) else match.group(2)
                     line_number = content[:match.start()].count("\n") + 1
                     
-                    has_placeholders = "$" in table
+                    has_placeholders = "$" in table_or_query
                     dataset_type = "jdbc"
                     
                     if pattern_name == "jdbc_read":
-                        fact = ReadFact(
-                            source_file=source_file,
-                            line_number=line_number,
-                            dataset_urn=f"jdbc://{table}",
-                            dataset_type=dataset_type,
-                            confidence=0.80,
-                            extraction_method=ExtractionMethod.REGEX,
-                            evidence=match.group(0)[:100],
-                            has_placeholders=has_placeholders
-                        )
-                        fact.params["dbtable"] = table
-                        facts.append(fact)
+                        # Extract actual table names from JDBC query
+                        # Could be a simple table name or a SQL query in parentheses
+                        tables = self._extract_tables_from_jdbc_query(table_or_query)
+                        
+                        # Create a fact for each extracted table
+                        for table in tables:
+                            fact = ReadFact(
+                                source_file=source_file,
+                                line_number=line_number,
+                                dataset_urn=f"jdbc://{table}",
+                                dataset_type=dataset_type,
+                                confidence=0.80 if not table_or_query.startswith('(') else 0.70,  # Lower confidence for parsed queries
+                                extraction_method=ExtractionMethod.REGEX,
+                                evidence=match.group(0)[:100],
+                                has_placeholders=has_placeholders or "$" in table
+                            )
+                            fact.params["dbtable"] = table
+                            facts.append(fact)
                     else:
-                        fact = WriteFact(
-                            source_file=source_file,
-                            line_number=line_number,
-                            dataset_urn=f"jdbc://{table}",
-                            dataset_type=dataset_type,
-                            confidence=0.80,
-                            extraction_method=ExtractionMethod.REGEX,
-                            evidence=match.group(0)[:100],
-                            has_placeholders=has_placeholders
-                        )
-                        fact.params["dbtable"] = table
-                        facts.append(fact)
+                        # JDBC write - typically a simple table name, but could also be a query
+                        tables = self._extract_tables_from_jdbc_query(table_or_query)
+                        
+                        # Create a fact for each extracted table
+                        for table in tables:
+                            fact = WriteFact(
+                                source_file=source_file,
+                                line_number=line_number,
+                                dataset_urn=f"jdbc://{table}",
+                                dataset_type=dataset_type,
+                                confidence=0.80 if not table_or_query.startswith('(') else 0.70,
+                                extraction_method=ExtractionMethod.REGEX,
+                                evidence=match.group(0)[:100],
+                                has_placeholders=has_placeholders or "$" in table
+                            )
+                            fact.params["dbtable"] = table
+                            facts.append(fact)
         
         # Extract Kafka operations
         for pattern_name, pattern in self.patterns.items():
@@ -508,7 +524,7 @@ class ScalaExtractor(BaseExtractor):
         
         return facts
     
-    def _resolve_datetime_format(self, java_format: str, dt: 'datetime') -> str:
+    def _resolve_datetime_format(self, java_format: str, dt: datetime) -> str:
         """Convert Java/Scala date format to actual value.
         
         Java/Scala formats:
@@ -536,6 +552,113 @@ class ScalaExtractor(BaseExtractor):
         except:
             # If conversion fails, return placeholder
             return f"TIMESTAMP_{java_format}"
+    
+    def _extract_tables_from_jdbc_query(self, query: str) -> Set[str]:
+        """Extract table names from JDBC query string.
+        
+        JDBC queries can be:
+        1. Simple table name: "customers"
+        2. SQL query in parentheses: "(SELECT * FROM customers WHERE ...)"
+        """
+        tables = set()
+        
+        # Check if query is wrapped in parentheses (SQL subquery)
+        query_stripped = query.strip()
+        if query_stripped.startswith('(') and query_stripped.endswith(')'):
+            # This is a SQL query, parse it to extract table names
+            sql_query = query_stripped[1:-1]  # Remove outer parentheses
+            
+            try:
+                parsed = sqlparse.parse(sql_query)
+                for statement in parsed:
+                    # Extract tables from FROM clauses
+                    tables.update(self._extract_tables_from_select(statement))
+            except Exception:
+                # If parsing fails, try regex fallback
+                # Look for FROM <table> or JOIN <table>
+                from_pattern = re.compile(r'\bFROM\s+([^\s,;()]+)', re.IGNORECASE)
+                join_pattern = re.compile(r'\bJOIN\s+([^\s,;()]+)', re.IGNORECASE)
+                
+                for match in from_pattern.finditer(sql_query):
+                    table_name = match.group(1).strip()
+                    if table_name and not table_name.upper() in ('SELECT', 'WHERE'):
+                        tables.add(table_name)
+                
+                for match in join_pattern.finditer(sql_query):
+                    table_name = match.group(1).strip()
+                    if table_name and not table_name.upper() in ('SELECT', 'WHERE'):
+                        tables.add(table_name)
+        else:
+            # Simple table name
+            tables.add(query_stripped)
+        
+        return tables
+    
+    def _extract_tables_from_select(self, statement: sqlparse.sql.Statement) -> Set[str]:
+        """Extract table names from SELECT statement using sqlparse."""
+        tables = set()
+        tokens = list(statement.flatten())
+        
+        in_from = False
+        in_join = False
+        
+        for i, token in enumerate(tokens):
+            token_text = token.value.upper()
+            
+            if token.ttype is Keyword and token_text == "FROM":
+                in_from = True
+            elif in_from and token.ttype not in (Keyword, sqlparse.tokens.Whitespace, sqlparse.tokens.Punctuation):
+                table_name = self._extract_sql_identifier(tokens, i)
+                if table_name:
+                    tables.add(table_name)
+                in_from = False
+            
+            if token.ttype is Keyword and "JOIN" in token_text:
+                in_join = True
+            elif in_join and token.ttype not in (Keyword, sqlparse.tokens.Whitespace):
+                table_name = self._extract_sql_identifier(tokens, i)
+                if table_name:
+                    tables.add(table_name)
+                in_join = False
+        
+        return tables
+    
+    def _extract_sql_identifier(self, tokens: List, start_idx: int) -> str:
+        """Extract SQL identifier (table name) from token list."""
+        identifier_parts = []
+        i = start_idx
+        
+        while i < len(tokens):
+            token = tokens[i]
+            value = token.value
+            ttype = token.ttype
+            
+            # Stop at keywords
+            if ttype == Keyword:
+                break
+            
+            # Stop at whitespace
+            if ttype == sqlparse.tokens.Whitespace:
+                break
+            
+            # Include dots for schema.table notation
+            if ttype == sqlparse.tokens.Punctuation:
+                if value == '.':
+                    identifier_parts.append(value)
+                    i += 1
+                    continue
+                else:
+                    break
+            
+            # Stop at SQL keywords
+            if value.upper() in ('WHERE', 'ON', 'AND', 'OR', 'SELECT', 'FROM', 'JOIN', 
+                                  'LEFT', 'RIGHT', 'INNER', 'OUTER', 'GROUP', 'ORDER', 'LIMIT'):
+                break
+            
+            identifier_parts.append(value)
+            i += 1
+        
+        return ''.join(identifier_parts).strip()
     
     def _remove_comments(self, content: str) -> str:
         """Remove Scala comments."""
